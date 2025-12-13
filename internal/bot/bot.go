@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -18,15 +19,18 @@ import (
 )
 
 type Bot struct {
-	bot     *bot.Bot
-	storage *storage.Storage
-	ocr     *ocr.OCR
+	bot          *bot.Bot
+	storage      *storage.Storage
+	ocr          *ocr.OCR
+	lastSticker  map[int64]string // userID -> stickerID
+	lastStickerMu sync.RWMutex
 }
 
 func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 	b := &Bot{
-		storage: storage,
-		ocr:     ocr,
+		storage:     storage,
+		ocr:         ocr,
+		lastSticker: make(map[int64]string),
 	}
 
 	opts := []bot.Option{
@@ -50,6 +54,7 @@ func (b *Bot) registerHandlers() {
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, b.handleStats)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/search", bot.MatchTypePrefix, b.handleSearch)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/addpack", bot.MatchTypePrefix, b.handleAddPack)
+	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/edit", bot.MatchTypePrefix, b.handleEdit)
 }
 
 func (b *Bot) Start(ctx context.Context) {
@@ -69,7 +74,8 @@ func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Up
 /help — помощь
 /stats — статистика
 /search <текст> — поиск
-/addpack <имя_пака> — добавить пак`
+/addpack <имя_пака> — добавить пак
+/edit <текст> — исправить текст последнего стикера`
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -86,7 +92,10 @@ func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 
 Как искать:
 /search пятница — найдет стикеры с текстом "пятница"
-Или просто напиши текст — тоже найду!`
+Или просто напиши текст — тоже найду!
+
+Исправить текст:
+/edit <правильный текст> — после отправки стикера`
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -238,6 +247,49 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	})
 }
 
+func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	newText := strings.TrimPrefix(update.Message.Text, "/edit")
+	newText = strings.TrimSpace(newText)
+
+	if newText == "" {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Укажи текст: /edit <правильный текст>",
+		})
+		return
+	}
+
+	userID := update.Message.From.ID
+
+	// Получаем последний стикер пользователя
+	b.lastStickerMu.RLock()
+	stickerID, ok := b.lastSticker[userID]
+	b.lastStickerMu.RUnlock()
+
+	if !ok || stickerID == "" {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Сначала отправь стикер, текст которого хочешь исправить.",
+		})
+		return
+	}
+
+	// Обновляем текст
+	if err := b.storage.UpdateStickerText(userID, stickerID, newText); err != nil {
+		log.Printf("Error updating sticker text: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Ошибка при обновлении текста",
+		})
+		return
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("Текст обновлен на: \"%s\"", newText),
+	})
+}
+
 func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
@@ -293,11 +345,16 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		return
 	}
 
+	// Сохраняем как последний стикер для /edit
+	b.lastStickerMu.Lock()
+	b.lastSticker[userID] = sticker.FileUniqueID
+	b.lastStickerMu.Unlock()
+
 	var msg string
 	if text != "" {
-		msg = fmt.Sprintf("Стикер сохранен! Распознанный текст: \"%s\"", text)
+		msg = fmt.Sprintf("Стикер сохранен! Распознанный текст: \"%s\"\n\nНеправильно? /edit <правильный текст>", text)
 	} else {
-		msg = "Стикер сохранен! Текст не распознан (возможно его нет на стикере)"
+		msg = "Стикер сохранен! Текст не распознан.\n\nДобавить вручную: /edit <текст>"
 	}
 
 	// Добавляем подсказку про пак

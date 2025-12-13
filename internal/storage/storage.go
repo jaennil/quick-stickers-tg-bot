@@ -101,6 +101,12 @@ func (s *Storage) GetUserStickerCount(userID int64) (int, error) {
 	return count, err
 }
 
+func (s *Storage) UpdateStickerText(userID int64, stickerID string, text string) error {
+	query := `UPDATE stickers SET text = ? WHERE user_id = ? AND sticker_id = ?`
+	_, err := s.db.Exec(query, text, userID, stickerID)
+	return err
+}
+
 func (s *Storage) Close() error {
 	return s.db.Close()
 }
