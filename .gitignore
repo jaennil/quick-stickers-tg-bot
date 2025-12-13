@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Database
+*.db
+
+# Binary
+sticker-search-bot
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
