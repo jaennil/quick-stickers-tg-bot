@@ -33,11 +33,11 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, erro
 	default:
 	}
 
-	// Пробуем разные режимы Tesseract
+	// Пробуем сначала только русский (меньше путаницы с латиницей)
 	results := []string{}
 
-	// PSM 6 - единый блок текста
-	if text := runTesseract(ctx, processedPath, "6"); text != "" {
+	// PSM 6 - единый блок текста, только русский
+	if text := runTesseractLang(ctx, processedPath, "6", "rus"); text != "" {
 		results = append(results, text)
 	}
 
@@ -48,8 +48,8 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, erro
 	default:
 	}
 
-	// PSM 11 - разреженный текст
-	if text := runTesseract(ctx, processedPath, "11"); text != "" {
+	// PSM 11 - разреженный текст, только русский
+	if text := runTesseractLang(ctx, processedPath, "11", "rus"); text != "" {
 		results = append(results, text)
 	}
 
@@ -60,8 +60,8 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, erro
 	default:
 	}
 
-	// PSM 3 - авто
-	if text := runTesseract(ctx, processedPath, "3"); text != "" {
+	// PSM 6 - с русским и английским (для смешанного текста)
+	if text := runTesseractLang(ctx, processedPath, "6", "rus+eng"); text != "" {
 		results = append(results, text)
 	}
 
@@ -77,9 +77,9 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, erro
 	return bestResult, nil
 }
 
-func runTesseract(ctx context.Context, imagePath, psm string) string {
+func runTesseractLang(ctx context.Context, imagePath, psm, lang string) string {
 	cmd := exec.CommandContext(ctx, "tesseract", imagePath, "stdout",
-		"-l", "rus+eng",
+		"-l", lang,
 		"--psm", psm,
 		"--oem", "3",
 	)
@@ -95,12 +95,13 @@ func runTesseract(ctx context.Context, imagePath, psm string) string {
 }
 
 func preprocessImage(ctx context.Context, src, dst string) error {
-	// ImageMagick: увеличиваем, повышаем контраст, бинаризация
+	// ImageMagick: увеличиваем, убираем фон, бинаризация
 	cmd := exec.CommandContext(ctx, "convert", src,
-		"-resize", "400%",           // Увеличиваем
-		"-colorspace", "gray",       // Градации серого
-		"-contrast-stretch", "0",    // Контраст
-		"-sharpen", "0x1",           // Резкость
+		"-resize", "300%",              // Увеличиваем
+		"-colorspace", "gray",          // Градации серого
+		"-normalize",                   // Нормализация яркости
+		"-threshold", "50%",            // Бинаризация (чёрно-белое)
+		"-morphology", "Close", "Square:1", // Убираем шум
 		dst,
 	)
 	return cmd.Run()
