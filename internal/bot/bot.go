@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -214,54 +216,86 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	}
 
 	userID := update.Message.From.ID
-	processed := 0
-	withText := 0
-	lastUpdate := 0
 
-	for i, sticker := range stickerSet.Stickers {
-		file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
-		if err != nil {
-			log.Printf("Error getting file: %v", err)
-			continue
-		}
+	// Многопоточная обработка
+	var processed atomic.Int64
+	var withText atomic.Int64
+	var completed atomic.Int64
 
-		fileURL := tgBot.FileDownloadLink(file)
-		text, _ := b.downloadAndOCR(fileURL)
+	const workers = 10
+	jobs := make(chan models.Sticker, len(stickerSet.Stickers))
+	var wg sync.WaitGroup
 
-		s := &storage.Sticker{
-			UserID:    userID,
-			StickerID: sticker.FileUniqueID,
-			SetName:   setName,
-			FileID:    sticker.FileID,
-			Text:      text,
-			Emoji:     sticker.Emoji,
-		}
+	// Запускаем воркеры
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sticker := range jobs {
+				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+				if err != nil {
+					completed.Add(1)
+					continue
+				}
 
-		if err := b.storage.SaveSticker(s); err == nil {
-			processed++
-			if text != "" {
-				withText++
+				fileURL := tgBot.FileDownloadLink(file)
+				text, _ := b.downloadAndOCR(fileURL)
+
+				s := &storage.Sticker{
+					UserID:    userID,
+					StickerID: sticker.FileUniqueID,
+					SetName:   setName,
+					FileID:    sticker.FileID,
+					Text:      text,
+					Emoji:     sticker.Emoji,
+				}
+
+				if err := b.storage.SaveSticker(s); err == nil {
+					processed.Add(1)
+					if text != "" {
+						withText.Add(1)
+					}
+				}
+				completed.Add(1)
 			}
-		}
-
-		// Обновляем прогресс каждые 5 стикеров или в конце
-		current := i + 1
-		if current-lastUpdate >= 5 || current == total {
-			percent := current * 100 / total
-			tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: progressMsg.ID,
-				Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(current, total), percent, current, total),
-			})
-			lastUpdate = current
-		}
+		}()
 	}
+
+	// Отправляем задачи
+	for _, sticker := range stickerSet.Stickers {
+		jobs <- sticker
+	}
+	close(jobs)
+
+	// Обновляем прогресс пока воркеры работают
+	go func() {
+		lastUpdate := int64(0)
+		for {
+			current := completed.Load()
+			if current >= int64(total) {
+				break
+			}
+			if current-lastUpdate >= 3 {
+				percent := current * 100 / int64(total)
+				tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+					ChatID:    chatID,
+					MessageID: progressMsg.ID,
+					Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(int(current), total), percent, current, total),
+				})
+				lastUpdate = current
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	// Ждём завершения всех воркеров
+	wg.Wait()
 
 	// Финальное сообщение
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed, withText),
+		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
 	})
 }
 
@@ -342,53 +376,85 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 		return
 	}
 
-	processed := 0
-	withText := 0
-	lastUpdate := 0
+	// Многопоточная обработка
+	var processed atomic.Int64
+	var withText atomic.Int64
+	var completed atomic.Int64
 
-	for i, sticker := range stickerSet.Stickers {
-		file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
-		if err != nil {
-			continue
-		}
+	const workers = 10
+	jobs := make(chan models.Sticker, len(stickerSet.Stickers))
+	var wg sync.WaitGroup
 
-		fileURL := tgBot.FileDownloadLink(file)
-		text, _ := b.downloadAndOCR(fileURL)
+	// Запускаем воркеры
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sticker := range jobs {
+				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+				if err != nil {
+					completed.Add(1)
+					continue
+				}
 
-		s := &storage.Sticker{
-			UserID:    userID,
-			StickerID: sticker.FileUniqueID,
-			SetName:   setName,
-			FileID:    sticker.FileID,
-			Text:      text,
-			Emoji:     sticker.Emoji,
-		}
+				fileURL := tgBot.FileDownloadLink(file)
+				text, _ := b.downloadAndOCR(fileURL)
 
-		if err := b.storage.SaveSticker(s); err == nil {
-			processed++
-			if text != "" {
-				withText++
+				s := &storage.Sticker{
+					UserID:    userID,
+					StickerID: sticker.FileUniqueID,
+					SetName:   setName,
+					FileID:    sticker.FileID,
+					Text:      text,
+					Emoji:     sticker.Emoji,
+				}
+
+				if err := b.storage.SaveSticker(s); err == nil {
+					processed.Add(1)
+					if text != "" {
+						withText.Add(1)
+					}
+				}
+				completed.Add(1)
 			}
-		}
-
-		// Обновляем прогресс каждые 5 стикеров или в конце
-		current := i + 1
-		if current-lastUpdate >= 5 || current == total {
-			percent := current * 100 / total
-			tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: progressMsg.ID,
-				Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(current, total), percent, current, total),
-			})
-			lastUpdate = current
-		}
+		}()
 	}
+
+	// Отправляем задачи
+	for _, sticker := range stickerSet.Stickers {
+		jobs <- sticker
+	}
+	close(jobs)
+
+	// Обновляем прогресс пока воркеры работают
+	go func() {
+		lastUpdate := int64(0)
+		for {
+			current := completed.Load()
+			if current >= int64(total) {
+				break
+			}
+			if current-lastUpdate >= 3 {
+				percent := current * 100 / int64(total)
+				tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+					ChatID:    chatID,
+					MessageID: progressMsg.ID,
+					Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(int(current), total), percent, current, total),
+				})
+				lastUpdate = current
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	// Ждём завершения всех воркеров
+	wg.Wait()
 
 	// Финальное сообщение
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed, withText),
+		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
 	})
 }
 
