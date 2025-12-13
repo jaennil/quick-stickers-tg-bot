@@ -222,15 +222,18 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	var withText atomic.Int64
 	var completed atomic.Int64
 
-	const workers = 10
-	jobs := make(chan models.Sticker, len(stickerSet.Stickers))
+	const workers = 5
+	jobs := make(chan models.Sticker, workers) // Маленький буфер для постепенной обработки
 	var wg sync.WaitGroup
 
-	// Запускаем воркеры
+	// Запускаем воркеры с задержкой
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			// Небольшая задержка чтобы воркеры стартовали постепенно
+			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
+
 			for sticker := range jobs {
 				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
@@ -258,14 +261,16 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 				}
 				completed.Add(1)
 			}
-		}()
+		}(w)
 	}
 
-	// Отправляем задачи
-	for _, sticker := range stickerSet.Stickers {
-		jobs <- sticker
-	}
-	close(jobs)
+	// Отправляем задачи в горутине
+	go func() {
+		for _, sticker := range stickerSet.Stickers {
+			jobs <- sticker
+		}
+		close(jobs)
+	}()
 
 	// Обновляем прогресс пока воркеры работают
 	go func() {
@@ -381,15 +386,18 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	var withText atomic.Int64
 	var completed atomic.Int64
 
-	const workers = 10
-	jobs := make(chan models.Sticker, len(stickerSet.Stickers))
+	const workers = 5
+	jobs := make(chan models.Sticker, workers) // Маленький буфер для постепенной обработки
 	var wg sync.WaitGroup
 
-	// Запускаем воркеры
+	// Запускаем воркеры с задержкой
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			// Небольшая задержка чтобы воркеры стартовали постепенно
+			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
+
 			for sticker := range jobs {
 				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
@@ -417,14 +425,16 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 				}
 				completed.Add(1)
 			}
-		}()
+		}(w)
 	}
 
-	// Отправляем задачи
-	for _, sticker := range stickerSet.Stickers {
-		jobs <- sticker
-	}
-	close(jobs)
+	// Отправляем задачи в горутине
+	go func() {
+		for _, sticker := range stickerSet.Stickers {
+			jobs <- sticker
+		}
+		close(jobs)
+	}()
 
 	// Обновляем прогресс пока воркеры работают
 	go func() {
