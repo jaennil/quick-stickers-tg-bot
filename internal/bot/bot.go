@@ -49,6 +49,7 @@ func (b *Bot) registerHandlers() {
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, b.handleHelp)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, b.handleStats)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/search", bot.MatchTypePrefix, b.handleSearch)
+	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/addpack", bot.MatchTypePrefix, b.handleAddPack)
 }
 
 func (b *Bot) Start(ctx context.Context) {
@@ -60,13 +61,15 @@ func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Up
 	msg := `Привет! Я помогу найти нужный стикер по тексту.
 
 Как использовать:
-1. Перешли мне стикер - я распознаю текст и сохраню
-2. Напиши /search <текст> - найду стикеры с этим текстом
+1. Перешли мне стикер — я распознаю текст и сохраню
+2. /addpack <имя_пака> — добавить весь стикер-пак
+3. /search <текст> — найду стикеры с этим текстом
 
 Команды:
-/help - помощь
-/stats - статистика твоих стикеров
-/search <текст> - поиск стикера`
+/help — помощь
+/stats — статистика
+/search <текст> — поиск
+/addpack <имя_пака> — добавить пак`
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -76,13 +79,14 @@ func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Up
 
 func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	msg := `Как добавить стикеры:
-- Просто перешли мне любой стикер
-- Я распознаю текст на нем и сохраню
+• Перешли мне стикер — добавлю один
+• /addpack <имя_пака> — добавлю весь пак
+
+Имя пака можно узнать: перешли стикер → в ответе будет имя пака.
 
 Как искать:
-/search пятница - найдет стикеры с текстом "пятница"
-
-Чем больше стикеров добавишь, тем лучше поиск!`
+/search пятница — найдет стикеры с текстом "пятница"
+Или просто напиши текст — тоже найду!`
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -159,6 +163,81 @@ func (b *Bot) handleSearch(ctx context.Context, tgBot *bot.Bot, update *models.U
 	}
 }
 
+func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	setName := strings.TrimPrefix(update.Message.Text, "/addpack")
+	setName = strings.TrimSpace(setName)
+
+	if setName == "" {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Укажи имя стикер-пака: /addpack <имя_пака>\n\nИмя пака можно узнать, переслав мне любой стикер из него.",
+		})
+		return
+	}
+
+	// Получаем стикер-пак
+	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
+	if err != nil {
+		log.Printf("Error getting sticker set: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("Не удалось найти стикер-пак '%s'. Проверь правильность имени.", setName),
+		})
+		return
+	}
+
+	total := len(stickerSet.Stickers)
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("Начинаю индексацию пака \"%s\" (%d стикеров)...", stickerSet.Title, total),
+	})
+
+	userID := update.Message.From.ID
+	processed := 0
+	withText := 0
+
+	for _, sticker := range stickerSet.Stickers {
+		// Скачиваем и распознаем
+		file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+		if err != nil {
+			log.Printf("Error getting file: %v", err)
+			continue
+		}
+
+		fileURL := tgBot.FileDownloadLink(file)
+		text, err := b.downloadAndOCR(fileURL)
+		if err != nil {
+			log.Printf("Error OCR: %v", err)
+			text = ""
+		}
+
+		// Сохраняем
+		s := &storage.Sticker{
+			UserID:    userID,
+			StickerID: sticker.FileUniqueID,
+			SetName:   setName,
+			FileID:    sticker.FileID,
+			Text:      text,
+			Emoji:     sticker.Emoji,
+		}
+
+		if err := b.storage.SaveSticker(s); err != nil {
+			log.Printf("Error saving sticker: %v", err)
+			continue
+		}
+
+		processed++
+		if text != "" {
+			withText++
+		}
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("Готово! Добавлено %d стикеров, текст распознан на %d.", processed, withText),
+	})
+}
+
 func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
@@ -219,6 +298,11 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		msg = fmt.Sprintf("Стикер сохранен! Распознанный текст: \"%s\"", text)
 	} else {
 		msg = "Стикер сохранен! Текст не распознан (возможно его нет на стикере)"
+	}
+
+	// Добавляем подсказку про пак
+	if sticker.SetName != "" {
+		msg += fmt.Sprintf("\n\nПак: %s\nДобавить весь пак: /addpack %s", sticker.SetName, sticker.SetName)
 	}
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
