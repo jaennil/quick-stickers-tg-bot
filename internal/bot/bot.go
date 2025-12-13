@@ -280,14 +280,14 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 				default:
 				}
 
-				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+				file, err := tgBot.GetFile(indexCtx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
 					completed.Add(1)
 					continue
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, _ := b.downloadAndOCR(fileURL)
+				text, _ := b.downloadAndOCR(indexCtx, fileURL)
 
 				s := &storage.Sticker{
 					UserID:    userID,
@@ -509,14 +509,14 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 				default:
 				}
 
-				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+				file, err := tgBot.GetFile(indexCtx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
 					completed.Add(1)
 					continue
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, _ := b.downloadAndOCR(fileURL)
+				text, _ := b.downloadAndOCR(indexCtx, fileURL)
 
 				s := &storage.Sticker{
 					UserID:    userID,
@@ -752,7 +752,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 
 	// Скачиваем файл
 	fileURL := tgBot.FileDownloadLink(file)
-	text, err := b.downloadAndOCR(fileURL)
+	text, err := b.downloadAndOCR(ctx, fileURL)
 	if err != nil {
 		log.Printf("Error OCR: %v", err)
 		text = "" // Сохраняем без текста
@@ -846,7 +846,14 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 	}
 }
 
-func (b *Bot) downloadAndOCR(fileURL string) (string, error) {
+func (b *Bot) downloadAndOCR(ctx context.Context, fileURL string) (string, error) {
+	// Проверяем отмену перед началом
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
 	// Скачиваем файл
 	resp, err := http.Get(fileURL)
 	if err != nil {
@@ -871,16 +878,16 @@ func (b *Bot) downloadAndOCR(fileURL string) (string, error) {
 	defer os.Remove(pngPath)
 
 	// Используем ImageMagick для конвертации
-	if err := convertWebPToPNG(tmpFile.Name(), pngPath); err != nil {
+	if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
 		// Пробуем OCR напрямую на webp
-		return b.ocr.RecognizeText(tmpFile.Name())
+		return b.ocr.RecognizeText(ctx, tmpFile.Name())
 	}
 
-	return b.ocr.RecognizeText(pngPath)
+	return b.ocr.RecognizeText(ctx, pngPath)
 }
 
-func convertWebPToPNG(src, dst string) error {
-	cmd := exec.Command("convert", src, dst)
+func convertWebPToPNG(ctx context.Context, src, dst string) error {
+	cmd := exec.CommandContext(ctx, "convert", src, dst)
 	return cmd.Run()
 }
 

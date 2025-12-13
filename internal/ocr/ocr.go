@@ -2,6 +2,7 @@ package ocr
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"regexp"
@@ -15,31 +16,52 @@ func New() *OCR {
 }
 
 // RecognizeText распознает текст на изображении через Tesseract
-func (o *OCR) RecognizeText(imagePath string) (string, error) {
+func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, error) {
 	// Предобработка изображения для лучшего распознавания
 	processedPath := imagePath + "_processed.png"
 	defer os.Remove(processedPath)
 
-	if err := preprocessImage(imagePath, processedPath); err != nil {
+	if err := preprocessImage(ctx, imagePath, processedPath); err != nil {
 		// Если предобработка не удалась, пробуем с оригиналом
 		processedPath = imagePath
+	}
+
+	// Проверяем отмену
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
 	}
 
 	// Пробуем разные режимы Tesseract
 	results := []string{}
 
 	// PSM 6 - единый блок текста
-	if text := runTesseract(processedPath, "6"); text != "" {
+	if text := runTesseract(ctx, processedPath, "6"); text != "" {
 		results = append(results, text)
+	}
+
+	// Проверяем отмену
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
 	}
 
 	// PSM 11 - разреженный текст
-	if text := runTesseract(processedPath, "11"); text != "" {
+	if text := runTesseract(ctx, processedPath, "11"); text != "" {
 		results = append(results, text)
 	}
 
+	// Проверяем отмену
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
 	// PSM 3 - авто
-	if text := runTesseract(processedPath, "3"); text != "" {
+	if text := runTesseract(ctx, processedPath, "3"); text != "" {
 		results = append(results, text)
 	}
 
@@ -55,8 +77,8 @@ func (o *OCR) RecognizeText(imagePath string) (string, error) {
 	return bestResult, nil
 }
 
-func runTesseract(imagePath, psm string) string {
-	cmd := exec.Command("tesseract", imagePath, "stdout",
+func runTesseract(ctx context.Context, imagePath, psm string) string {
+	cmd := exec.CommandContext(ctx, "tesseract", imagePath, "stdout",
 		"-l", "rus+eng",
 		"--psm", psm,
 		"--oem", "3",
@@ -72,9 +94,9 @@ func runTesseract(imagePath, psm string) string {
 	return stdout.String()
 }
 
-func preprocessImage(src, dst string) error {
+func preprocessImage(ctx context.Context, src, dst string) error {
 	// ImageMagick: увеличиваем, повышаем контраст, бинаризация
-	cmd := exec.Command("convert", src,
+	cmd := exec.CommandContext(ctx, "convert", src,
 		"-resize", "400%",           // Увеличиваем
 		"-colorspace", "gray",       // Градации серого
 		"-contrast-stretch", "0",    // Контраст
