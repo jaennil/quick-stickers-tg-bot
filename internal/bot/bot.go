@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,20 +29,24 @@ type Bot struct {
 	lastStickerMu  sync.RWMutex
 	awaitingEdit   map[int64]bool // userID -> waiting for edit text
 	awaitingEditMu sync.RWMutex
+	activeIndexing   map[int64]context.CancelFunc // userID -> cancel function
+	activeIndexingMu sync.RWMutex
 }
 
 func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 	b := &Bot{
-		storage:      storage,
-		ocr:          ocr,
-		lastSticker:  make(map[int64]string),
-		awaitingEdit: make(map[int64]bool),
+		storage:        storage,
+		ocr:            ocr,
+		lastSticker:    make(map[int64]string),
+		awaitingEdit:   make(map[int64]bool),
+		activeIndexing: make(map[int64]context.CancelFunc),
 	}
 
 	opts := []bot.Option{
 		bot.WithDefaultHandler(b.defaultHandler),
 		bot.WithCallbackQueryDataHandler("addpack:", bot.MatchTypePrefix, b.handleAddPackCallback),
 		bot.WithCallbackQueryDataHandler("edit:", bot.MatchTypePrefix, b.handleEditCallback),
+		bot.WithCallbackQueryDataHandler("cancel:", bot.MatchTypePrefix, b.handleCancelCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -191,6 +196,20 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 		return
 	}
 
+	userID := update.Message.From.ID
+
+	// Проверяем, нет ли уже активной индексации
+	b.activeIndexingMu.RLock()
+	_, exists := b.activeIndexing[userID]
+	b.activeIndexingMu.RUnlock()
+	if exists {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "У тебя уже идёт индексация. Дождись завершения или отмени её.",
+		})
+		return
+	}
+
 	// Получаем стикер-пак
 	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
 	if err != nil {
@@ -205,25 +224,44 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	total := len(stickerSet.Stickers)
 	chatID := update.Message.Chat.ID
 
-	// Отправляем начальное сообщение с прогрессом
+	// Создаём контекст с отменой
+	indexCtx, cancel := context.WithCancel(ctx)
+
+	// Сохраняем функцию отмены
+	b.activeIndexingMu.Lock()
+	b.activeIndexing[userID] = cancel
+	b.activeIndexingMu.Unlock()
+
+	// Cleanup при завершении
+	defer func() {
+		b.activeIndexingMu.Lock()
+		delete(b.activeIndexing, userID)
+		b.activeIndexingMu.Unlock()
+	}()
+
+	// Отправляем начальное сообщение с прогрессом и кнопкой отмены
 	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   fmt.Sprintf("Индексирую пак \"%s\"\n%s 0%%", stickerSet.Title, progressBar(0, total)),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+			},
+		},
 	})
 	if err != nil {
 		log.Printf("Error sending progress message: %v", err)
 		return
 	}
 
-	userID := update.Message.From.ID
-
 	// Многопоточная обработка
 	var processed atomic.Int64
 	var withText atomic.Int64
 	var completed atomic.Int64
+	var cancelled atomic.Bool
 
 	const workers = 5
-	jobs := make(chan models.Sticker, workers) // Маленький буфер для постепенной обработки
+	jobs := make(chan models.Sticker, workers)
 	var wg sync.WaitGroup
 
 	// Запускаем воркеры с задержкой
@@ -231,10 +269,17 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			// Небольшая задержка чтобы воркеры стартовали постепенно
 			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
 
 			for sticker := range jobs {
+				// Проверяем отмену
+				select {
+				case <-indexCtx.Done():
+					cancelled.Store(true)
+					return
+				default:
+				}
+
 				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
 					completed.Add(1)
@@ -267,7 +312,12 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	// Отправляем задачи в горутине
 	go func() {
 		for _, sticker := range stickerSet.Stickers {
-			jobs <- sticker
+			select {
+			case <-indexCtx.Done():
+				close(jobs)
+				return
+			case jobs <- sticker:
+			}
 		}
 		close(jobs)
 	}()
@@ -276,6 +326,12 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	go func() {
 		lastUpdate := int64(0)
 		for {
+			select {
+			case <-indexCtx.Done():
+				return
+			default:
+			}
+
 			current := completed.Load()
 			if current >= int64(total) {
 				break
@@ -286,6 +342,11 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 					ChatID:    chatID,
 					MessageID: progressMsg.ID,
 					Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(int(current), total), percent, current, total),
+					ReplyMarkup: &models.InlineKeyboardMarkup{
+						InlineKeyboard: [][]models.InlineKeyboardButton{
+							{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+						},
+					},
 				})
 				lastUpdate = current
 			}
@@ -297,11 +358,19 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	wg.Wait()
 
 	// Финальное сообщение
-	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: progressMsg.ID,
-		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
-	})
+	if cancelled.Load() {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("⛔ Индексация пака \"%s\" отменена\n\nУспело сохраниться: %d стикеров", stickerSet.Title, processed.Load()),
+		})
+	} else {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
+		})
+	}
 }
 
 func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -352,6 +421,19 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	userID := update.CallbackQuery.From.ID
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
 
+	// Проверяем, нет ли уже активной индексации
+	b.activeIndexingMu.RLock()
+	_, exists := b.activeIndexing[userID]
+	b.activeIndexingMu.RUnlock()
+	if exists {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "У тебя уже идёт индексация",
+			ShowAlert:       true,
+		})
+		return
+	}
+
 	// Отвечаем на callback чтобы убрать "часики"
 	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
@@ -371,10 +453,30 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 
 	total := len(stickerSet.Stickers)
 
-	// Отправляем начальное сообщение с прогрессом
+	// Создаём контекст с отменой
+	indexCtx, cancel := context.WithCancel(ctx)
+
+	// Сохраняем функцию отмены
+	b.activeIndexingMu.Lock()
+	b.activeIndexing[userID] = cancel
+	b.activeIndexingMu.Unlock()
+
+	// Cleanup при завершении
+	defer func() {
+		b.activeIndexingMu.Lock()
+		delete(b.activeIndexing, userID)
+		b.activeIndexingMu.Unlock()
+	}()
+
+	// Отправляем начальное сообщение с прогрессом и кнопкой отмены
 	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   fmt.Sprintf("Индексирую пак \"%s\"\n%s 0%%", stickerSet.Title, progressBar(0, total)),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+			},
+		},
 	})
 	if err != nil {
 		log.Printf("Error sending progress message: %v", err)
@@ -385,9 +487,10 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	var processed atomic.Int64
 	var withText atomic.Int64
 	var completed atomic.Int64
+	var cancelled atomic.Bool
 
 	const workers = 5
-	jobs := make(chan models.Sticker, workers) // Маленький буфер для постепенной обработки
+	jobs := make(chan models.Sticker, workers)
 	var wg sync.WaitGroup
 
 	// Запускаем воркеры с задержкой
@@ -395,10 +498,17 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			// Небольшая задержка чтобы воркеры стартовали постепенно
 			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
 
 			for sticker := range jobs {
+				// Проверяем отмену
+				select {
+				case <-indexCtx.Done():
+					cancelled.Store(true)
+					return
+				default:
+				}
+
 				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
 					completed.Add(1)
@@ -431,7 +541,12 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	// Отправляем задачи в горутине
 	go func() {
 		for _, sticker := range stickerSet.Stickers {
-			jobs <- sticker
+			select {
+			case <-indexCtx.Done():
+				close(jobs)
+				return
+			case jobs <- sticker:
+			}
 		}
 		close(jobs)
 	}()
@@ -440,6 +555,12 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	go func() {
 		lastUpdate := int64(0)
 		for {
+			select {
+			case <-indexCtx.Done():
+				return
+			default:
+			}
+
 			current := completed.Load()
 			if current >= int64(total) {
 				break
@@ -450,6 +571,11 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 					ChatID:    chatID,
 					MessageID: progressMsg.ID,
 					Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(int(current), total), percent, current, total),
+					ReplyMarkup: &models.InlineKeyboardMarkup{
+						InlineKeyboard: [][]models.InlineKeyboardButton{
+							{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+						},
+					},
 				})
 				lastUpdate = current
 			}
@@ -461,11 +587,19 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	wg.Wait()
 
 	// Финальное сообщение
-	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: progressMsg.ID,
-		Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
-	})
+	if cancelled.Load() {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("⛔ Индексация пака \"%s\" отменена\n\nУспело сохраниться: %d стикеров", stickerSet.Title, processed.Load()),
+		})
+	} else {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
+		})
+	}
 }
 
 func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -490,6 +624,51 @@ func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "Введи правильный текст для этого стикера:",
+	})
+}
+
+func (b *Bot) handleCancelCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	targetUserIDStr := strings.TrimPrefix(update.CallbackQuery.Data, "cancel:")
+	targetUserID, err := strconv.ParseInt(targetUserIDStr, 10, 64)
+	if err != nil {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка",
+		})
+		return
+	}
+
+	callerUserID := update.CallbackQuery.From.ID
+
+	// Проверяем, что отменяет тот же пользователь
+	if callerUserID != targetUserID {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ты не можешь отменить чужую индексацию",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	// Ищем и вызываем функцию отмены
+	b.activeIndexingMu.RLock()
+	cancel, exists := b.activeIndexing[targetUserID]
+	b.activeIndexingMu.RUnlock()
+
+	if !exists {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Индексация уже завершена",
+		})
+		return
+	}
+
+	// Отменяем
+	cancel()
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            "Отменяю...",
 	})
 }
 
