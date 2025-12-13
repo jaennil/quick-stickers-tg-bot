@@ -531,7 +531,15 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 	}
 
 	stickers, err := b.storage.SearchByText(update.Message.From.ID, query)
-	if err != nil || len(stickers) == 0 {
+	if err != nil {
+		return
+	}
+
+	if len(stickers) == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
+		})
 		return
 	}
 
