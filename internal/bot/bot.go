@@ -19,22 +19,27 @@ import (
 )
 
 type Bot struct {
-	bot          *bot.Bot
-	storage      *storage.Storage
-	ocr          *ocr.OCR
-	lastSticker  map[int64]string // userID -> stickerID
-	lastStickerMu sync.RWMutex
+	bot            *bot.Bot
+	storage        *storage.Storage
+	ocr            *ocr.OCR
+	lastSticker    map[int64]string // userID -> stickerID
+	lastStickerMu  sync.RWMutex
+	awaitingEdit   map[int64]bool // userID -> waiting for edit text
+	awaitingEditMu sync.RWMutex
 }
 
 func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 	b := &Bot{
-		storage:     storage,
-		ocr:         ocr,
-		lastSticker: make(map[int64]string),
+		storage:      storage,
+		ocr:          ocr,
+		lastSticker:  make(map[int64]string),
+		awaitingEdit: make(map[int64]bool),
 	}
 
 	opts := []bot.Option{
 		bot.WithDefaultHandler(b.defaultHandler),
+		bot.WithCallbackQueryDataHandler("addpack:", bot.MatchTypePrefix, b.handleAddPackCallback),
+		bot.WithCallbackQueryDataHandler("edit:", bot.MatchTypePrefix, b.handleEditCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -290,6 +295,94 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	})
 }
 
+func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	setName := strings.TrimPrefix(update.CallbackQuery.Data, "addpack:")
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	// Отвечаем на callback чтобы убрать "часики"
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            "Начинаю индексацию...",
+	})
+
+	// Получаем стикер-пак
+	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
+	if err != nil {
+		log.Printf("Error getting sticker set: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("Не удалось найти стикер-пак '%s'", setName),
+		})
+		return
+	}
+
+	total := len(stickerSet.Stickers)
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Индексирую пак \"%s\" (%d стикеров)...", stickerSet.Title, total),
+	})
+
+	processed := 0
+	withText := 0
+
+	for _, sticker := range stickerSet.Stickers {
+		file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
+		if err != nil {
+			continue
+		}
+
+		fileURL := tgBot.FileDownloadLink(file)
+		text, _ := b.downloadAndOCR(fileURL)
+
+		s := &storage.Sticker{
+			UserID:    userID,
+			StickerID: sticker.FileUniqueID,
+			SetName:   setName,
+			FileID:    sticker.FileID,
+			Text:      text,
+			Emoji:     sticker.Emoji,
+		}
+
+		if err := b.storage.SaveSticker(s); err == nil {
+			processed++
+			if text != "" {
+				withText++
+			}
+		}
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Готово! Добавлено %d стикеров, текст распознан на %d.", processed, withText),
+	})
+}
+
+func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	stickerID := strings.TrimPrefix(update.CallbackQuery.Data, "edit:")
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	// Сохраняем sticker ID для редактирования
+	b.lastStickerMu.Lock()
+	b.lastSticker[userID] = stickerID
+	b.lastStickerMu.Unlock()
+
+	// Ставим флаг ожидания текста
+	b.awaitingEditMu.Lock()
+	b.awaitingEdit[userID] = true
+	b.awaitingEditMu.Unlock()
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "Введи правильный текст для этого стикера:",
+	})
+}
+
 func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
@@ -301,10 +394,60 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 	}
 
+	userID := update.Message.From.ID
+
+	// Проверяем режим ожидания редактирования
+	b.awaitingEditMu.RLock()
+	awaiting := b.awaitingEdit[userID]
+	b.awaitingEditMu.RUnlock()
+
+	if awaiting && update.Message.Text != "" && !strings.HasPrefix(update.Message.Text, "/") {
+		b.handleAwaitingEdit(ctx, tgBot, update)
+		return
+	}
+
 	// Обработка текстового поиска без команды
 	if update.Message.Text != "" && !strings.HasPrefix(update.Message.Text, "/") {
 		b.handleTextSearch(ctx, tgBot, update)
 	}
+}
+
+func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	userID := update.Message.From.ID
+	newText := strings.TrimSpace(update.Message.Text)
+
+	// Убираем флаг ожидания
+	b.awaitingEditMu.Lock()
+	delete(b.awaitingEdit, userID)
+	b.awaitingEditMu.Unlock()
+
+	// Получаем sticker ID
+	b.lastStickerMu.RLock()
+	stickerID := b.lastSticker[userID]
+	b.lastStickerMu.RUnlock()
+
+	if stickerID == "" {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Ошибка: стикер не найден",
+		})
+		return
+	}
+
+	// Обновляем текст
+	if err := b.storage.UpdateStickerText(userID, stickerID, newText); err != nil {
+		log.Printf("Error updating sticker text: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Ошибка при обновлении текста",
+		})
+		return
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("✅ Текст обновлен: \"%s\"", newText),
+	})
 }
 
 func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -352,19 +495,32 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 
 	var msg string
 	if text != "" {
-		msg = fmt.Sprintf("Стикер сохранен! Распознанный текст: \"%s\"\n\nНеправильно? /edit <правильный текст>", text)
+		msg = fmt.Sprintf("Стикер сохранен!\nРаспознанный текст: \"%s\"", text)
 	} else {
-		msg = "Стикер сохранен! Текст не распознан.\n\nДобавить вручную: /edit <текст>"
+		msg = "Стикер сохранен!\nТекст не распознан."
 	}
 
-	// Добавляем подсказку про пак
+	// Создаём inline кнопки
+	var buttons [][]models.InlineKeyboardButton
+
+	// Кнопка "Исправить текст"
+	buttons = append(buttons, []models.InlineKeyboardButton{
+		{Text: "✏️ Исправить текст", CallbackData: "edit:" + sticker.FileUniqueID},
+	})
+
+	// Кнопка "Добавить весь пак" (если есть имя пака)
 	if sticker.SetName != "" {
-		msg += fmt.Sprintf("\n\nПак: %s\nДобавить весь пак: /addpack %s", sticker.SetName, sticker.SetName)
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: "📦 Добавить весь пак", CallbackData: "addpack:" + sticker.SetName},
+		})
 	}
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   msg,
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
 	})
 }
 
