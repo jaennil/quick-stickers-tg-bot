@@ -1,0 +1,132 @@
+package repository
+
+import (
+	"strings"
+
+	"github.com/jmoiron/sqlx"
+)
+
+type BaseRepository struct {
+	db *sqlx.DB
+}
+
+func NewBase(db *sqlx.DB) *BaseRepository {
+	r := &BaseRepository{db: db}
+	r.updateTextLower()
+	return r
+}
+
+func (r *BaseRepository) updateTextLower() {
+	rows, err := r.db.Query("SELECT id, text FROM stickers WHERE text_lower IS NULL AND text IS NOT NULL AND text != ''")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var text string
+		if rows.Scan(&id, &text) == nil {
+			r.db.Exec(r.db.Rebind("UPDATE stickers SET text_lower = ? WHERE id = ?"), strings.ToLower(text), id)
+		}
+	}
+}
+
+func (r *BaseRepository) GetUserOCREngine(userID int64) string {
+	var engine string
+	err := r.db.Get(&engine, r.db.Rebind("SELECT ocr_engine FROM user_settings WHERE user_id = ?"), userID)
+	if err != nil {
+		return "paddle"
+	}
+	return engine
+}
+
+func (r *BaseRepository) SetUserOCREngine(userID int64, engine string) error {
+	query := r.db.Rebind(`
+		INSERT INTO user_settings (user_id, ocr_engine) VALUES (?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET ocr_engine = EXCLUDED.ocr_engine
+	`)
+	_, err := r.db.Exec(query, userID, engine)
+	return err
+}
+
+func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
+	textLower := strings.ToLower(sticker.Text)
+	query := r.db.Rebind(`
+		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, text, text_lower, emoji)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, sticker_id) DO UPDATE SET
+			text = EXCLUDED.text,
+			text_lower = EXCLUDED.text_lower,
+			emoji = EXCLUDED.emoji
+	`)
+	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.Text, textLower, sticker.Emoji)
+	return err
+}
+
+func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, error) {
+	queryLower := strings.ToLower(query)
+	sqlQuery := r.db.Rebind(`
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji
+		FROM stickers
+		WHERE user_id = ? AND text_lower LIKE ?
+		LIMIT 50
+	`)
+	rows, err := r.db.Query(sqlQuery, userID, "%"+queryLower+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stickers []*Sticker
+	for rows.Next() {
+		var st Sticker
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji); err != nil {
+			return nil, err
+		}
+		stickers = append(stickers, &st)
+	}
+	return stickers, rows.Err()
+}
+
+func (r *BaseRepository) GetUserStickerCount(userID int64) (int, error) {
+	var count int
+	err := r.db.Get(&count, r.db.Rebind("SELECT COUNT(*) FROM stickers WHERE user_id = ?"), userID)
+	return count, err
+}
+
+func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji
+		FROM stickers
+		WHERE user_id = ?
+		ORDER BY id DESC
+		LIMIT ? OFFSET ?
+	`)
+	rows, err := r.db.Query(query, userID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stickers []*Sticker
+	for rows.Next() {
+		var st Sticker
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji); err != nil {
+			return nil, err
+		}
+		stickers = append(stickers, &st)
+	}
+	return stickers, rows.Err()
+}
+
+func (r *BaseRepository) UpdateStickerText(userID int64, stickerID string, text string) error {
+	textLower := strings.ToLower(text)
+	query := r.db.Rebind("UPDATE stickers SET text = ?, text_lower = ? WHERE user_id = ? AND sticker_id = ?")
+	_, err := r.db.Exec(query, text, textLower, userID, stickerID)
+	return err
+}
+
+func (r *BaseRepository) Close() error {
+	return r.db.Close()
+}
