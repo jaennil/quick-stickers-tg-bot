@@ -91,6 +91,15 @@ class SmoothScrollListWidget(QListWidget):
         event.accept()
 
 
+class ClickableLineEdit(QLineEdit):
+    """QLineEdit that emits signal on mouse click"""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self.clicked.emit()
+
+
 class SearchableChatSelector(QWidget):
     """Custom widget with QLineEdit + QCompleter for chat search"""
 
@@ -105,8 +114,9 @@ class SearchableChatSelector(QWidget):
         self._display_names: List[str] = []
 
         # Create line edit
-        self._line_edit = QLineEdit()
+        self._line_edit = ClickableLineEdit()
         self._line_edit.setPlaceholderText("Search chats...")
+        self._line_edit.clicked.connect(self._on_click)
         self._line_edit.textChanged.connect(self._on_text_changed)
 
         # Create completer
@@ -126,11 +136,23 @@ class SearchableChatSelector(QWidget):
         layout.addWidget(self._line_edit)
         self.setLayout(layout)
 
+    def _on_click(self):
+        """Show all chats when clicking on empty field"""
+        if not self._line_edit.text() and self._display_names:
+            self._show_unfiltered()
+
     def _on_text_changed(self, text: str):
-        """Show all chats when text is empty"""
+        """Switch between filtered and unfiltered mode"""
         if not text and self._display_names:
-            self._completer.setCompletionPrefix("")
-            self._completer.complete()
+            self._show_unfiltered()
+        else:
+            # Switch back to filtered mode
+            self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+    def _show_unfiltered(self):
+        """Show all chats without filtering"""
+        self._completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self._completer.complete()
 
     def setChats(self, chats: List[ChatInfo]):
         """Set the list of chats (already sorted by recent activity from Telegram)"""
