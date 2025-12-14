@@ -130,6 +130,9 @@ class SearchableComboBox(QComboBox):
         """Filter items based on search text"""
         self._is_filtering = True
 
+        # Save cursor position
+        cursor_pos = self.lineEdit().cursorPosition()
+
         # Clear and repopulate with filtered items
         self.blockSignals(True)
         self.clear()
@@ -139,6 +142,10 @@ class SearchableComboBox(QComboBox):
         for item_text, item_data in self._all_items:
             if not filter_text or filter_text in item_text.lower():
                 self.addItem(item_text, item_data)
+
+        # Restore search text (clear() removes it)
+        self.lineEdit().setText(text)
+        self.lineEdit().setCursorPosition(cursor_pos)
 
         self.blockSignals(False)
 
