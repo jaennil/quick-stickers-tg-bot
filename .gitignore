@@ -1,5 +1,6 @@
 # Environment
 .env
+.venv
 .venv/
 config.yaml
 scripts/
@@ -20,3 +21,4 @@ sticker-search-bot
 # OS
 .DS_Store
 Thumbs.db
+CLAUDE.md
