@@ -92,7 +92,7 @@ class StickerSearchApp(QWidget):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        self.setFixedSize(500, 450)
+        self.setFixedSize(600, 550)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
@@ -123,7 +123,7 @@ class StickerSearchApp(QWidget):
         # Results grid
         self.results_list = QListWidget()
         self.results_list.setViewMode(QListView.ViewMode.IconMode)
-        self.results_list.setIconSize(QSize(80, 80))
+        self.results_list.setIconSize(QSize(128, 128))
         self.results_list.setSpacing(8)
         self.results_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.results_list.setMovement(QListView.Movement.Static)
@@ -219,7 +219,7 @@ class StickerSearchApp(QWidget):
     def _create_spinner_frames(self, num_frames: int = 12) -> List[QPixmap]:
         """Create spinning wheel animation frames"""
         frames = []
-        size = 80
+        size = 128
         for i in range(num_frames):
             pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
@@ -228,14 +228,14 @@ class StickerSearchApp(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             center = QPointF(size / 2, size / 2)
-            radius = size / 2 - 10
+            radius = size / 2 - 16
 
             for j in range(num_frames):
                 angle = (360 / num_frames) * j - 90
                 alpha = int(255 * ((j - i) % num_frames) / num_frames)
                 color = QColor(150, 150, 150, alpha)
                 pen = QPen(color)
-                pen.setWidth(4)
+                pen.setWidth(6)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
 
@@ -486,7 +486,7 @@ class StickerSearchApp(QWidget):
         for sticker in stickers:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, sticker)
-            item.setSizeHint(QSize(88, 88))
+            item.setSizeHint(QSize(136, 136))
 
             # Set cached thumbnail or schedule download with spinner
             if sticker.file_id in self.thumb_cache:
@@ -560,11 +560,14 @@ class StickerSearchApp(QWidget):
     async def _download_sticker_thumb(self, file_id: str):
         """Download sticker thumbnail and emit signal when ready"""
         try:
+            thumb_size = 128
+
             # Check disk cache first
             cache_file = self.thumb_cache_dir / f"{hashlib.md5(file_id.encode()).hexdigest()}.png"
             if cache_file.exists():
                 pixmap = QPixmap(str(cache_file))
                 if not pixmap.isNull():
+                    pixmap = pixmap.scaled(thumb_size, thumb_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
                     return
 
@@ -574,6 +577,7 @@ class StickerSearchApp(QWidget):
                 qimg = QImage.fromData(db_thumb)
                 pixmap = QPixmap.fromImage(qimg)
                 if not pixmap.isNull():
+                    pixmap = pixmap.scaled(thumb_size, thumb_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     # Save to disk cache for faster access next time
                     pixmap.save(str(cache_file), "PNG")
                     self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
@@ -584,9 +588,10 @@ class StickerSearchApp(QWidget):
             if not sticker_data:
                 return
 
-            # Convert webp to PNG using PIL
+            # Convert webp to PNG using PIL and resize
             img = Image.open(io.BytesIO(sticker_data.getvalue()))
-            img.thumbnail((80, 80), Image.Resampling.LANCZOS)
+            # Resize to fit in thumb_size while keeping aspect ratio
+            img.thumbnail((thumb_size * 2, thumb_size * 2), Image.Resampling.LANCZOS)
 
             # Convert to QPixmap
             buffer = io.BytesIO()
@@ -597,6 +602,7 @@ class StickerSearchApp(QWidget):
             pixmap = QPixmap.fromImage(qimg)
 
             if not pixmap.isNull():
+                pixmap = pixmap.scaled(thumb_size, thumb_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 # Save to disk cache
                 pixmap.save(str(cache_file), "PNG")
                 self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
