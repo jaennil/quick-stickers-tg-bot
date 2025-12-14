@@ -84,6 +84,7 @@ class StickerSearchApp(QWidget):
         self.init_pyrogram()
         self.start_hotkey_listener()
         self._start_spinner_timer()
+        self._start_chat_detection_timer()
 
     def init_ui(self):
         self.setWindowTitle("Sticker Search")
@@ -270,6 +271,23 @@ class StickerSearchApp(QWidget):
             if sticker and sticker.file_id in self.pending_thumbs:
                 item.setIcon(spinner_icon)
 
+    def _start_chat_detection_timer(self):
+        """Start timer to detect current Telegram chat"""
+        self._last_detected_chat = None
+        self.chat_detection_timer = QTimer()
+        self.chat_detection_timer.timeout.connect(self._update_detected_chat)
+        self.chat_detection_timer.start(500)  # Check every 500ms
+
+    def _update_detected_chat(self):
+        """Update selected chat based on current Telegram window"""
+        if not self.isVisible():
+            return
+
+        detected_chat = self._detect_telegram_chat()
+        if detected_chat and detected_chat != self._last_detected_chat:
+            self._last_detected_chat = detected_chat
+            self._auto_select_chat(detected_chat)
+
     def init_db(self):
         try:
             db_config = self.config['database']
@@ -421,9 +439,13 @@ class StickerSearchApp(QWidget):
             self.hide()
             return
 
+        # Reset last detected chat to force re-detection
+        self._last_detected_chat = None
+
         # Auto-detect current Telegram chat
         detected_chat = self._detect_telegram_chat()
         if detected_chat:
+            self._last_detected_chat = detected_chat
             self._auto_select_chat(detected_chat)
 
         # Open on the monitor where cursor is located
