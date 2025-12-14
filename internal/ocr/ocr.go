@@ -96,16 +96,16 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string
 	switch engine {
 	case "api":
 		text, err := o.recognizeViaAPI(ctx, imagePath)
-		if err == nil && text != "" {
+		if err == nil {
+			// Return result even if empty - ocr.space is authoritative
 			return text, nil
 		}
 		// If quota exceeded, propagate error (let caller decide)
 		if errors.Is(err, ErrQuotaExceeded) {
 			return "", err
 		}
-		// fallback to easyocr for other errors
-		logger.Log.Warnw("[OCR] api failed, falling back to easyocr", "error", err)
-		return o.recognizeViaLocalServer(ctx, imagePath, "easy")
+		// For other errors (network, etc), return error without fallback
+		return "", err
 
 	case "tesseract":
 		return o.recognizeViaTesseract(ctx, imagePath)
