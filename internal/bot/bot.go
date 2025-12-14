@@ -31,6 +31,8 @@ type Bot struct {
 	awaitingEditMu sync.RWMutex
 	activeIndexing   map[int64]context.CancelFunc // userID -> cancel function
 	activeIndexingMu sync.RWMutex
+	pendingOCR       map[string]map[string]string // stickerID -> engine -> text
+	pendingOCRMu     sync.RWMutex
 }
 
 func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
@@ -40,6 +42,7 @@ func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 		lastSticker:    make(map[int64]string),
 		awaitingEdit:   make(map[int64]bool),
 		activeIndexing: make(map[int64]context.CancelFunc),
+		pendingOCR:     make(map[string]map[string]string),
 	}
 
 	opts := []bot.Option{
@@ -47,6 +50,8 @@ func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler("addpack:", bot.MatchTypePrefix, b.handleAddPackCallback),
 		bot.WithCallbackQueryDataHandler("edit:", bot.MatchTypePrefix, b.handleEditCallback),
 		bot.WithCallbackQueryDataHandler("cancel:", bot.MatchTypePrefix, b.handleCancelCallback),
+		bot.WithCallbackQueryDataHandler("ocr:", bot.MatchTypePrefix, b.handleOCRCallback),
+		bot.WithCallbackQueryDataHandler("selectocr:", bot.MatchTypePrefix, b.handleSelectOCRCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -67,6 +72,8 @@ func (b *Bot) registerHandlers() {
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/search", bot.MatchTypePrefix, b.handleSearch)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/addpack", bot.MatchTypePrefix, b.handleAddPack)
 	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/edit", bot.MatchTypePrefix, b.handleEdit)
+	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/settings", bot.MatchTypeExact, b.handleSettings)
+	b.bot.RegisterHandler(bot.HandlerTypeMessageText, "/list", bot.MatchTypePrefix, b.handleList)
 }
 
 func (b *Bot) Start(ctx context.Context) {
@@ -85,6 +92,7 @@ func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Up
 Команды:
 /help — помощь
 /stats — статистика
+/settings — выбрать OCR движок
 /search <текст> — поиск
 /addpack <имя_пака> — добавить пак
 /edit <текст> — исправить текст последнего стикера`
@@ -107,7 +115,10 @@ func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 Или просто напиши текст — тоже найду!
 
 Исправить текст:
-/edit <правильный текст> — после отправки стикера`
+/edit <правильный текст> — после отправки стикера
+
+Настройки:
+/settings — выбрать движок OCR (PaddleOCR, EasyOCR, OCR.space API, Tesseract)`
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -130,6 +141,282 @@ func (b *Bot) handleStats(ctx context.Context, tgBot *bot.Bot, update *models.Up
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   msg,
+	})
+}
+
+func (b *Bot) handleList(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	userID := update.Message.From.ID
+	chatID := update.Message.Chat.ID
+
+	// Парсим номер страницы из команды /list или /list 2
+	pageStr := strings.TrimPrefix(update.Message.Text, "/list")
+	pageStr = strings.TrimSpace(pageStr)
+	page := 1
+	if pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	const perPage = 5
+	offset := (page - 1) * perPage
+
+	// Получаем общее количество
+	total, err := b.storage.GetUserStickerCount(userID)
+	if err != nil {
+		log.Printf("Error getting sticker count: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Ошибка при получении списка",
+		})
+		return
+	}
+
+	if total == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "У тебя пока нет сохранённых стикеров.\n\nОтправь мне стикер или используй /addpack <имя_пака>",
+		})
+		return
+	}
+
+	// Получаем стикеры
+	stickers, err := b.storage.GetUserStickers(userID, perPage, offset)
+	if err != nil {
+		log.Printf("Error getting stickers: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Ошибка при получении списка",
+		})
+		return
+	}
+
+	if len(stickers) == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("Страница %d пуста. Всего стикеров: %d", page, total),
+		})
+		return
+	}
+
+	totalPages := (total + perPage - 1) / perPage
+
+	// Отправляем каждый стикер с его текстом
+	for _, st := range stickers {
+		text := st.Text
+		if text == "" {
+			text = "(текст не распознан)"
+		}
+
+		// Отправляем стикер
+		tgBot.SendSticker(ctx, &bot.SendStickerParams{
+			ChatID:  chatID,
+			Sticker: &models.InputFileString{Data: st.FileID},
+		})
+
+		// Отправляем информацию о стикере
+		info := fmt.Sprintf("Текст: %s", text)
+		if st.SetName != "" {
+			info += fmt.Sprintf("\nПак: %s", st.SetName)
+		}
+
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   info,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "✏️ Изменить текст", CallbackData: "edit:" + st.StickerID}},
+				},
+			},
+		})
+	}
+
+	// Навигация по страницам
+	var navText string
+	if totalPages > 1 {
+		navText = fmt.Sprintf("Страница %d из %d (всего %d стикеров)\n\n", page, totalPages, total)
+		if page > 1 {
+			navText += fmt.Sprintf("/list %d — предыдущая\n", page-1)
+		}
+		if page < totalPages {
+			navText += fmt.Sprintf("/list %d — следующая", page+1)
+		}
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   navText,
+		})
+	}
+}
+
+func (b *Bot) handleSettings(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	userID := update.Message.From.ID
+	currentEngine := b.storage.GetUserOCREngine(userID)
+
+	engines := []struct {
+		name  string
+		label string
+	}{
+		{"paddle", "PaddleOCR"},
+		{"easy", "EasyOCR"},
+		{"api", "OCR.space API"},
+		{"tesseract", "Tesseract"},
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+	for _, e := range engines {
+		label := e.label
+		if e.name == currentEngine {
+			label = "✓ " + label
+		}
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: label, CallbackData: "ocr:" + e.name},
+		})
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("Текущий OCR движок: %s\n\nВыбери движок для распознавания текста:", currentEngine),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
+}
+
+func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	engine := strings.TrimPrefix(update.CallbackQuery.Data, "ocr:")
+	userID := update.CallbackQuery.From.ID
+
+	// Проверяем валидность движка
+	validEngines := map[string]string{
+		"paddle":    "PaddleOCR",
+		"easy":      "EasyOCR",
+		"api":       "OCR.space API",
+		"tesseract": "Tesseract",
+	}
+
+	engineLabel, ok := validEngines[engine]
+	if !ok {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Неизвестный движок",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	// Сохраняем выбор
+	if err := b.storage.SetUserOCREngine(userID, engine); err != nil {
+		log.Printf("Error saving OCR engine: %v", err)
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка сохранения",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	// Обновляем кнопки
+	engines := []struct {
+		name  string
+		label string
+	}{
+		{"paddle", "PaddleOCR"},
+		{"easy", "EasyOCR"},
+		{"api", "OCR.space API"},
+		{"tesseract", "Tesseract"},
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+	for _, e := range engines {
+		label := e.label
+		if e.name == engine {
+			label = "✓ " + label
+		}
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: label, CallbackData: "ocr:" + e.name},
+		})
+	}
+
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
+		MessageID: update.CallbackQuery.Message.Message.ID,
+		Text:      fmt.Sprintf("Текущий OCR движок: %s\n\nВыбери движок для распознавания текста:", engine),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            fmt.Sprintf("Выбран: %s", engineLabel),
+	})
+}
+
+func (b *Bot) handleSelectOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	// Format: selectocr:stickerID:engine
+	data := strings.TrimPrefix(update.CallbackQuery.Data, "selectocr:")
+	parts := strings.SplitN(data, ":", 2)
+	if len(parts) != 2 {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка",
+		})
+		return
+	}
+
+	stickerID := parts[0]
+	engine := parts[1]
+	userID := update.CallbackQuery.From.ID
+
+	// Получаем сохраненные результаты
+	b.pendingOCRMu.RLock()
+	results, ok := b.pendingOCR[stickerID]
+	b.pendingOCRMu.RUnlock()
+
+	if !ok {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Результаты устарели, отправь стикер заново",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	text := results[engine]
+
+	// Сохраняем выбранный текст
+	if err := b.storage.UpdateStickerText(userID, stickerID, text); err != nil {
+		log.Printf("Error updating sticker text: %v", err)
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка сохранения",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	// Удаляем из pending
+	b.pendingOCRMu.Lock()
+	delete(b.pendingOCR, stickerID)
+	b.pendingOCRMu.Unlock()
+
+	// Обновляем сообщение
+	engineLabels := map[string]string{
+		"paddle":    "PaddleOCR",
+		"easy":      "EasyOCR",
+		"api":       "OCR.space",
+		"tesseract": "Tesseract",
+	}
+
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
+		MessageID: update.CallbackQuery.Message.Message.ID,
+		Text:      fmt.Sprintf("✅ Сохранено!\n\nДвижок: %s\nТекст: \"%s\"", engineLabels[engine], text),
+	})
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            "Сохранено!",
 	})
 }
 
@@ -197,6 +484,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	}
 
 	userID := update.Message.From.ID
+	ocrEngine := b.storage.GetUserOCREngine(userID)
 
 	// Проверяем, нет ли уже активной индексации
 	b.activeIndexingMu.RLock()
@@ -287,7 +575,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, _ := b.downloadAndOCR(indexCtx, fileURL)
+				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
 
 				s := &storage.Sticker{
 					UserID:    userID,
@@ -420,6 +708,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	setName := strings.TrimPrefix(update.CallbackQuery.Data, "addpack:")
 	userID := update.CallbackQuery.From.ID
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
+	ocrEngine := b.storage.GetUserOCREngine(userID)
 
 	// Проверяем, нет ли уже активной индексации
 	b.activeIndexingMu.RLock()
@@ -516,7 +805,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, _ := b.downloadAndOCR(indexCtx, fileURL)
+				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
 
 				s := &storage.Sticker{
 					UserID:    userID,
@@ -742,6 +1031,17 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	sticker := update.Message.Sticker
 	userID := update.Message.From.ID
+	chatID := update.Message.Chat.ID
+
+	// Отправляем сообщение о начале распознавания
+	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "Распознаю текст...",
+	})
+	if err != nil {
+		log.Printf("Error sending progress message: %v", err)
+		return
+	}
 
 	// Скачиваем стикер для OCR
 	file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
@@ -750,51 +1050,100 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		return
 	}
 
-	// Скачиваем файл
 	fileURL := tgBot.FileDownloadLink(file)
-	text, err := b.downloadAndOCR(ctx, fileURL)
-	if err != nil {
-		log.Printf("Error OCR: %v", err)
-		text = "" // Сохраняем без текста
+
+	// Запускаем все OCR движки параллельно
+	engines := []struct {
+		name  string
+		label string
+	}{
+		{"paddle", "PaddleOCR"},
+		{"easy", "EasyOCR"},
+		{"api", "OCR.space"},
+		{"tesseract", "Tesseract"},
 	}
 
-	// Сохраняем в базу
-	s := &storage.Sticker{
-		UserID:    userID,
-		StickerID: sticker.FileUniqueID,
-		SetName:   sticker.SetName,
-		FileID:    sticker.FileID,
-		Text:      text,
-		Emoji:     sticker.Emoji,
+	results := make(map[string]string)
+	var resultsMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, engine := range engines {
+		wg.Add(1)
+		go func(engineName string) {
+			defer wg.Done()
+			text, err := b.downloadAndOCR(ctx, fileURL, engineName)
+			if err != nil {
+				log.Printf("OCR error (%s): %v", engineName, err)
+				text = ""
+			}
+			resultsMu.Lock()
+			results[engineName] = text
+			resultsMu.Unlock()
+		}(engine.name)
 	}
 
-	if err := b.storage.SaveSticker(s); err != nil {
-		log.Printf("Error saving sticker: %v", err)
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Ошибка при сохранении стикера",
-		})
-		return
+	wg.Wait()
+
+	// Логируем результаты
+	log.Printf("OCR results for sticker %s:", sticker.FileUniqueID)
+	for name, text := range results {
+		if text != "" {
+			log.Printf("  %s: %q", name, text)
+		} else {
+			log.Printf("  %s: (empty)", name)
+		}
 	}
+
+	// Сохраняем результаты для выбора
+	b.pendingOCRMu.Lock()
+	b.pendingOCR[sticker.FileUniqueID] = results
+	b.pendingOCRMu.Unlock()
 
 	// Сохраняем как последний стикер для /edit
 	b.lastStickerMu.Lock()
 	b.lastSticker[userID] = sticker.FileUniqueID
 	b.lastStickerMu.Unlock()
 
-	var msg string
-	if text != "" {
-		msg = fmt.Sprintf("Стикер сохранен!\nРаспознанный текст: \"%s\"", text)
-	} else {
-		msg = "Стикер сохранен!\nТекст не распознан."
+	// Сохраняем стикер в базу (пока без текста)
+	s := &storage.Sticker{
+		UserID:    userID,
+		StickerID: sticker.FileUniqueID,
+		SetName:   sticker.SetName,
+		FileID:    sticker.FileID,
+		Text:      "",
+		Emoji:     sticker.Emoji,
+	}
+	if err := b.storage.SaveSticker(s); err != nil {
+		log.Printf("Error saving sticker: %v", err)
 	}
 
-	// Создаём inline кнопки
+	// Формируем сообщение с результатами
+	var msgBuilder strings.Builder
+	msgBuilder.WriteString("Результаты распознавания:\n\n")
+
 	var buttons [][]models.InlineKeyboardButton
+	hasResults := false
+
+	for _, engine := range engines {
+		text := results[engine.name]
+		if text != "" {
+			hasResults = true
+			msgBuilder.WriteString(fmt.Sprintf("%s:\n%s\n\n", engine.label, text))
+			buttons = append(buttons, []models.InlineKeyboardButton{
+				{Text: fmt.Sprintf("✓ %s", engine.label), CallbackData: fmt.Sprintf("selectocr:%s:%s", sticker.FileUniqueID, engine.name)},
+			})
+		} else {
+			msgBuilder.WriteString(fmt.Sprintf("%s:\n(не распознано)\n\n", engine.label))
+		}
+	}
+
+	if !hasResults {
+		msgBuilder.WriteString("Текст не распознан ни одним движком.")
+	}
 
 	// Кнопка "Исправить текст"
 	buttons = append(buttons, []models.InlineKeyboardButton{
-		{Text: "✏️ Исправить текст", CallbackData: "edit:" + sticker.FileUniqueID},
+		{Text: "✏️ Ввести вручную", CallbackData: "edit:" + sticker.FileUniqueID},
 	})
 
 	// Кнопка "Добавить весь пак" (если есть имя пака)
@@ -804,13 +1153,17 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		})
 	}
 
-	tgBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   msg,
+	_, err = tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: progressMsg.ID,
+		Text:      msgBuilder.String(),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: buttons,
 		},
 	})
+	if err != nil {
+		log.Printf("Error editing message: %v", err)
+	}
 }
 
 func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -846,7 +1199,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 	}
 }
 
-func (b *Bot) downloadAndOCR(ctx context.Context, fileURL string) (string, error) {
+func (b *Bot) downloadAndOCR(ctx context.Context, fileURL string, engine string) (string, error) {
 	// Проверяем отмену перед началом
 	select {
 	case <-ctx.Done():
@@ -880,10 +1233,10 @@ func (b *Bot) downloadAndOCR(ctx context.Context, fileURL string) (string, error
 	// Используем ImageMagick для конвертации
 	if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
 		// Пробуем OCR напрямую на webp
-		return b.ocr.RecognizeText(ctx, tmpFile.Name())
+		return b.ocr.RecognizeText(ctx, tmpFile.Name(), engine)
 	}
 
-	return b.ocr.RecognizeText(ctx, pngPath)
+	return b.ocr.RecognizeText(ctx, pngPath, engine)
 }
 
 func convertWebPToPNG(ctx context.Context, src, dst string) error {
