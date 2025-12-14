@@ -25,8 +25,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QListWidget, QListWidgetItem, QLabel,
     QComboBox, QPushButton, QListView
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer, QPointF
-from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage, QPainter, QColor, QPen
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer, QPointF, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage, QPainter, QColor, QPen, QWheelEvent
 from pyrogram import Client
 from PIL import Image
 import io
@@ -46,6 +46,48 @@ class ChatInfo:
     id: int
     name: str
     type: str
+
+
+class SmoothScrollListWidget(QListWidget):
+    """QListWidget with smooth scrolling animation"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scroll_animation = QPropertyAnimation(self.verticalScrollBar(), b"value")
+        self._scroll_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_animation.setDuration(300)
+        self._target_value = 0
+        self._scroll_step = 120  # pixels per scroll step
+
+    def wheelEvent(self, event: QWheelEvent):
+        # Get scroll delta
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        scrollbar = self.verticalScrollBar()
+
+        # Calculate target position
+        if self._scroll_animation.state() == QPropertyAnimation.State.Running:
+            # If animation is running, add to the target
+            current_target = self._target_value
+        else:
+            current_target = scrollbar.value()
+
+        # Calculate new target (negative delta = scroll down)
+        scroll_amount = -delta / 120 * self._scroll_step
+        self._target_value = int(current_target + scroll_amount)
+
+        # Clamp to valid range
+        self._target_value = max(scrollbar.minimum(), min(self._target_value, scrollbar.maximum()))
+
+        # Start animation
+        self._scroll_animation.stop()
+        self._scroll_animation.setStartValue(scrollbar.value())
+        self._scroll_animation.setEndValue(self._target_value)
+        self._scroll_animation.start()
+
+        event.accept()
 
 
 class SignalBridge(QObject):
@@ -121,8 +163,8 @@ class StickerSearchApp(QWidget):
         self.search_input.returnPressed.connect(self.on_enter_pressed)
         layout.addWidget(self.search_input)
 
-        # Results grid
-        self.results_list = QListWidget()
+        # Results grid with smooth scrolling
+        self.results_list = SmoothScrollListWidget()
         self.results_list.setViewMode(QListView.ViewMode.IconMode)
         self.results_list.setIconSize(QSize(200, 200))
         self.results_list.setSpacing(8)
