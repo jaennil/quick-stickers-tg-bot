@@ -74,8 +74,9 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string
 		if err == nil && text != "" {
 			return text, nil
 		}
-		// fallback to tesseract
-		return o.recognizeViaTesseract(ctx, imagePath)
+		// fallback to easyocr
+		logger.Log.Warnw("[OCR] api failed, falling back to easyocr", "error", err)
+		return o.recognizeViaLocalServer(ctx, imagePath, "easy")
 
 	case "tesseract":
 		return o.recognizeViaTesseract(ctx, imagePath)
@@ -86,6 +87,7 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string
 			return text, nil
 		}
 		// fallback to tesseract if server not running
+		logger.Log.Warnw("[OCR] local server failed, falling back to tesseract", "engine", engine, "error", err)
 		return o.recognizeViaTesseract(ctx, imagePath)
 
 	default:
@@ -94,6 +96,7 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string
 		if err == nil && text != "" {
 			return text, nil
 		}
+		logger.Log.Warnw("[OCR] local server failed, falling back to tesseract", "engine", "paddle", "error", err)
 		return o.recognizeViaTesseract(ctx, imagePath)
 	}
 }
