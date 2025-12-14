@@ -22,7 +22,7 @@ from pynput import keyboard
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QListWidget, QListWidgetItem, QLabel,
-    QComboBox, QPushButton
+    QComboBox, QPushButton, QListView
 )
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage
@@ -116,10 +116,15 @@ class StickerSearchApp(QWidget):
         self.search_input.returnPressed.connect(self.on_enter_pressed)
         layout.addWidget(self.search_input)
 
-        # Results list
+        # Results grid
         self.results_list = QListWidget()
-        self.results_list.setIconSize(QSize(64, 64))
-        self.results_list.itemDoubleClicked.connect(self.on_sticker_selected)
+        self.results_list.setViewMode(QListView.ViewMode.IconMode)
+        self.results_list.setIconSize(QSize(80, 80))
+        self.results_list.setSpacing(8)
+        self.results_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.results_list.setMovement(QListView.Movement.Static)
+        self.results_list.setWrapping(True)
+        self.results_list.itemClicked.connect(self.on_sticker_selected)
         layout.addWidget(self.results_list)
 
         # Status bar
@@ -178,8 +183,9 @@ class StickerSearchApp(QWidget):
                 outline: none;
             }
             QListWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid #3c3c3c;
+                padding: 4px;
+                border: none;
+                border-radius: 6px;
             }
             QListWidget::item:selected {
                 background-color: #094771;
@@ -193,6 +199,8 @@ class StickerSearchApp(QWidget):
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self).activated.connect(self.hide)
         QShortcut(QKeySequence(Qt.Key.Key_Down), self).activated.connect(self.select_next)
         QShortcut(QKeySequence(Qt.Key.Key_Up), self).activated.connect(self.select_prev)
+        QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self.select_next)
+        QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self.select_prev)
 
     def select_next(self):
         current = self.results_list.currentRow()
@@ -419,9 +427,8 @@ class StickerSearchApp(QWidget):
         self.results_list.clear()
         for sticker in stickers:
             item = QListWidgetItem()
-            text = sticker.text[:60] + "..." if len(sticker.text) > 60 else sticker.text
-            item.setText(f"{sticker.emoji}  {text}")
             item.setData(Qt.ItemDataRole.UserRole, sticker)
+            item.setSizeHint(QSize(88, 88))
 
             # Set cached thumbnail or schedule download
             if sticker.file_id in self.thumb_cache:
@@ -494,7 +501,7 @@ class StickerSearchApp(QWidget):
 
             # Convert webp to PNG using PIL
             img = Image.open(io.BytesIO(sticker_data.getvalue()))
-            img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+            img.thumbnail((80, 80), Image.Resampling.LANCZOS)
 
             # Convert to QPixmap
             buffer = io.BytesIO()
