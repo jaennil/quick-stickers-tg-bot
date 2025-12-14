@@ -25,6 +25,7 @@ type OCRConfig struct {
 	Engine       string   `yaml:"engine"`
 	SpaceAPIKeys []string `yaml:"space_api_keys"`
 	ServerURL    string   `yaml:"server_url"`
+	ProxyURL     string   `yaml:"proxy_url"`
 }
 
 func Load(path string) (*Config, error) {

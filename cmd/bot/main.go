@@ -35,7 +35,7 @@ func main() {
 	}
 	defer repo.Close()
 
-	ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ServerURL)
+	ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ServerURL, cfg.OCR.ProxyURL)
 
 	b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
 	if err != nil {

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jaennil/sticker-search-bot/internal/logger"
+	"golang.org/x/net/proxy"
 )
 
 // ErrQuotaExceeded is returned when OCR.space API quota is exceeded
@@ -28,15 +31,46 @@ type OCR struct {
 	apiKeyMu    sync.Mutex
 	client      *http.Client
 	serverURL   string
+	proxyURL    string
 }
 
-func New(apiKeys []string, serverURL string) *OCR {
+func New(apiKeys []string, serverURL string, proxyURL string) *OCR {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Configure proxy if provided
+	if proxyURL != "" {
+		parsedURL, err := url.Parse(proxyURL)
+		if err != nil {
+			logger.Log.Warnw("[OCR] invalid proxy URL", "proxy", proxyURL, "error", err)
+		} else if parsedURL.Scheme == "socks5" {
+			// SOCKS5 proxy
+			dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, nil, proxy.Direct)
+			if err != nil {
+				logger.Log.Warnw("[OCR] failed to create SOCKS5 dialer", "proxy", proxyURL, "error", err)
+			} else {
+				client.Transport = &http.Transport{
+					DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+						return dialer.Dial(network, addr)
+					},
+				}
+				logger.Log.Infow("[OCR] using SOCKS5 proxy for ocr.space", "proxy", proxyURL)
+			}
+		} else {
+			// HTTP/HTTPS proxy
+			client.Transport = &http.Transport{
+				Proxy: http.ProxyURL(parsedURL),
+			}
+			logger.Log.Infow("[OCR] using HTTP proxy for ocr.space", "proxy", proxyURL)
+		}
+	}
+
 	return &OCR{
 		apiKeys:   apiKeys,
 		serverURL: serverURL,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		proxyURL:  proxyURL,
+		client:    client,
 	}
 }
 
