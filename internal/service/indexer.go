@@ -235,6 +235,17 @@ func (i *Indexer) IndexPack(
 					)
 				}
 
+				// Skip stickers without text - they won't be searchable anyway
+				if text == "" {
+					logger.Log.Debugw("[INDEX] skipping sticker (no text)",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+						"emoji", sticker.Emoji,
+					)
+					completed.Add(1)
+					continue
+				}
+
 				s := &repository.Sticker{
 					UserID:    userID,
 					StickerID: sticker.FileUniqueID,
@@ -253,6 +264,7 @@ func (i *Indexer) IndexPack(
 					)
 				} else {
 					processed.Add(1)
+					withText.Add(1)
 					if job.IsReprocess {
 						reprocessed.Add(1)
 					}
@@ -262,23 +274,13 @@ func (i *Indexer) IndexPack(
 					default:
 						// Channel full, skip thumbnail
 					}
-					if text != "" {
-						withText.Add(1)
-						logger.Log.Infow("[INDEX] sticker processed",
-							"worker", workerID,
-							"sticker", sticker.FileUniqueID,
-							"text", text,
-							"emoji", sticker.Emoji,
-							"reprocess", job.IsReprocess,
-						)
-					} else {
-						logger.Log.Debugw("[INDEX] sticker processed (no text)",
-							"worker", workerID,
-							"sticker", sticker.FileUniqueID,
-							"emoji", sticker.Emoji,
-							"reprocess", job.IsReprocess,
-						)
-					}
+					logger.Log.Infow("[INDEX] sticker saved",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+						"text", text,
+						"emoji", sticker.Emoji,
+						"reprocess", job.IsReprocess,
+					)
 				}
 				completed.Add(1)
 			}
