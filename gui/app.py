@@ -92,7 +92,7 @@ class StickerSearchApp(QWidget):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        self.setFixedSize(600, 550)
+        self.setFixedSize(700, 650)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
@@ -123,7 +123,7 @@ class StickerSearchApp(QWidget):
         # Results grid
         self.results_list = QListWidget()
         self.results_list.setViewMode(QListView.ViewMode.IconMode)
-        self.results_list.setIconSize(QSize(128, 128))
+        self.results_list.setIconSize(QSize(200, 200))
         self.results_list.setSpacing(8)
         self.results_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.results_list.setMovement(QListView.Movement.Static)
@@ -219,7 +219,7 @@ class StickerSearchApp(QWidget):
     def _create_spinner_frames(self, num_frames: int = 12) -> List[QPixmap]:
         """Create spinning wheel animation frames"""
         frames = []
-        size = 128
+        size = 200
         for i in range(num_frames):
             pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
@@ -228,14 +228,14 @@ class StickerSearchApp(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             center = QPointF(size / 2, size / 2)
-            radius = size / 2 - 16
+            radius = size / 2 - 25
 
             for j in range(num_frames):
                 angle = (360 / num_frames) * j - 90
                 alpha = int(255 * ((j - i) % num_frames) / num_frames)
                 color = QColor(150, 150, 150, alpha)
                 pen = QPen(color)
-                pen.setWidth(6)
+                pen.setWidth(8)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
 
@@ -486,7 +486,7 @@ class StickerSearchApp(QWidget):
         for sticker in stickers:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, sticker)
-            item.setSizeHint(QSize(136, 136))
+            item.setSizeHint(QSize(210, 210))
 
             # Set cached thumbnail or schedule download with spinner
             if sticker.file_id in self.thumb_cache:
@@ -560,7 +560,7 @@ class StickerSearchApp(QWidget):
     async def _download_sticker_thumb(self, file_id: str):
         """Download sticker thumbnail and emit signal when ready"""
         try:
-            thumb_size = 128
+            thumb_size = 200
 
             # Check disk cache first
             cache_file = self.thumb_cache_dir / f"{hashlib.md5(file_id.encode()).hexdigest()}.png"
