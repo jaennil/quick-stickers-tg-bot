@@ -220,6 +220,12 @@ func (r *BaseRepository) GetUserPackStickerCount(userID int64, setName string) (
 	return count, err
 }
 
+func (r *BaseRepository) DeleteUserPack(userID int64, setName string) error {
+	query := r.db.Rebind("DELETE FROM stickers WHERE user_id = ? AND set_name = ?")
+	_, err := r.db.Exec(query, userID, setName)
+	return err
+}
+
 func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
 	query := r.db.Rebind(`
 		INSERT INTO sticker_thumbnails (file_id, thumbnail) VALUES (?, ?)

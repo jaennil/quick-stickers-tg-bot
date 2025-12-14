@@ -47,6 +47,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler("delete:", bot.MatchTypePrefix, b.handleDeleteCallback),
 		bot.WithCallbackQueryDataHandler("allstickers:", bot.MatchTypePrefix, b.handleAllStickersCallback),
 		bot.WithCallbackQueryDataHandler("pack:", bot.MatchTypePrefix, b.handlePackCallback),
+		bot.WithCallbackQueryDataHandler("deletepack:", bot.MatchTypePrefix, b.handleDeletePackCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -713,6 +714,45 @@ func (b *Bot) sendPackStickers(ctx context.Context, tgBot *bot.Bot, chatID int64
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{
 				navButtons,
+				{{Text: "🗑 Удалить пак", CallbackData: "deletepack:" + setName}},
+				{{Text: "◀️ К списку паков", CallbackData: "menu:list"}},
+			},
+		},
+	})
+}
+
+func (b *Bot) handleDeletePackCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	setName := strings.TrimPrefix(update.CallbackQuery.Data, "deletepack:")
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+	messageID := update.CallbackQuery.Message.Message.ID
+	logger.Log.Infow("[CALLBACK] deletepack", "pack", setName, "user", userID)
+
+	count, _ := b.repo.GetUserPackStickerCount(userID, setName)
+
+	if err := b.repo.DeleteUserPack(userID, setName); err != nil {
+		logger.Log.Errorw("[CALLBACK] deletepack error", "pack", setName, "user", userID, "error", err)
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка при удалении",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	logger.Log.Infow("[CALLBACK] deletepack success", "pack", setName, "user", userID, "deleted", count)
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            fmt.Sprintf("Удалено %d стикеров", count),
+	})
+
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("🗑 Пак \"%s\" удалён (%d стикеров)", setName, count),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{{Text: "◀️ К списку паков", CallbackData: "menu:list"}},
 			},
 		},
