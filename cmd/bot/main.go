@@ -11,36 +11,30 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/storage"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Загружаем .env файл
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	cfg := config.Load()
-
-	if cfg.TelegramToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN is required")
+	if cfg.Telegram.Token == "" {
+		log.Fatal("telegram.token is required in config.yaml")
 	}
 
 	// Инициализируем OCR
-	ocrService := ocr.New()
-	if !ocrService.IsAvailable() {
-		log.Println("Warning: Tesseract is not available, OCR will not work")
-	}
+	ocrService := ocr.New(cfg.OCR.SpaceAPIKeys)
 
 	// Инициализируем хранилище
-	store, err := storage.New(cfg.DatabasePath)
+	store, err := storage.New(cfg.Database.Path)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 	defer store.Close()
 
 	// Создаем бота
-	b, err := bot.New(cfg.TelegramToken, store, ocrService)
+	b, err := bot.New(cfg.Telegram.Token, store, ocrService)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}

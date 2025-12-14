@@ -122,9 +122,9 @@ func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64,
 		name  string
 		label string
 	}{
+		{"api", "OCR.space"},
 		{"paddle", "PaddleOCR"},
 		{"easy", "EasyOCR"},
-		{"api", "OCR.space"},
 		{"tesseract", "Tesseract"},
 	}
 
@@ -311,9 +311,9 @@ func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, us
 		name  string
 		label string
 	}{
+		{"api", "OCR.space"},
 		{"paddle", "PaddleOCR"},
 		{"easy", "EasyOCR"},
-		{"api", "OCR.space"},
 		{"tesseract", "Tesseract"},
 	}
 
@@ -1476,9 +1476,9 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		name  string
 		label string
 	}{
+		{"api", "OCR.space"},
 		{"paddle", "PaddleOCR"},
 		{"easy", "EasyOCR"},
-		{"api", "OCR.space"},
 		{"tesseract", "Tesseract"},
 	}
 

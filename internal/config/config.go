@@ -2,23 +2,48 @@ package config
 
 import (
 	"os"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	TelegramToken string
-	DatabasePath  string
+	Telegram TelegramConfig `yaml:"telegram"`
+	Database DatabaseConfig `yaml:"database"`
+	OCR      OCRConfig      `yaml:"ocr"`
 }
 
-func Load() *Config {
-	return &Config{
-		TelegramToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
-		DatabasePath:  getEnv("DATABASE_PATH", "stickers.db"),
-	}
+type TelegramConfig struct {
+	Token string `yaml:"token"`
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+type DatabaseConfig struct {
+	Path string `yaml:"path"`
+}
+
+type OCRConfig struct {
+	Engine       string   `yaml:"engine"`
+	SpaceAPIKeys []string `yaml:"space_api_keys"`
+	GoogleAPIKey string   `yaml:"google_api_key"`
+}
+
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	return defaultValue
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Defaults
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = "stickers.db"
+	}
+	if cfg.OCR.Engine == "" {
+		cfg.OCR.Engine = "paddle"
+	}
+
+	return &cfg, nil
 }

@@ -1,6 +1,7 @@
 # Environment
 .env
 .venv/
+config.yaml
 scripts/
 *.py
 
