@@ -588,10 +588,8 @@ class StickerSearchApp(QWidget):
             if not sticker_data:
                 return
 
-            # Convert webp to PNG using PIL and resize
+            # Convert webp to PNG using PIL (keep original size for quality)
             img = Image.open(io.BytesIO(sticker_data.getvalue()))
-            # Resize to fit in thumb_size while keeping aspect ratio
-            img.thumbnail((thumb_size * 2, thumb_size * 2), Image.Resampling.LANCZOS)
 
             # Convert to QPixmap
             buffer = io.BytesIO()
@@ -602,10 +600,11 @@ class StickerSearchApp(QWidget):
             pixmap = QPixmap.fromImage(qimg)
 
             if not pixmap.isNull():
-                pixmap = pixmap.scaled(thumb_size, thumb_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                # Save to disk cache
+                # Save full resolution to disk cache
                 pixmap.save(str(cache_file), "PNG")
-                self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
+                # Scale for display with high quality
+                scaled = pixmap.scaled(thumb_size, thumb_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.signal_bridge.sticker_thumb_loaded.emit(file_id, scaled)
 
         except Exception as e:
             pass  # Silently fail for thumbnails
