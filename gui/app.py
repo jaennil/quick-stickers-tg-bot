@@ -224,12 +224,8 @@ class StickerSearchApp(QWidget):
         self.chat_selector = SearchableChatSelector()
         self.chat_selector.setMinimumWidth(350)
         self.chat_selector.chatSelected.connect(self.on_chat_selected)
-        self.refresh_btn = QPushButton("↻")
-        self.refresh_btn.setFixedWidth(30)
-        self.refresh_btn.clicked.connect(self.refresh_chats)
         chat_layout.addWidget(chat_label)
         chat_layout.addWidget(self.chat_selector, 1)
-        chat_layout.addWidget(self.refresh_btn)
         layout.addLayout(chat_layout)
 
         # Search input
