@@ -93,6 +93,9 @@ class SmoothScrollListWidget(QListWidget):
 class SearchableComboBox(QComboBox):
     """QComboBox with search/filter functionality"""
 
+    # Signal emitted only when user explicitly selects an item
+    itemSelected = pyqtSignal(object)  # emits the data object
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setEditable(True)
@@ -100,12 +103,17 @@ class SearchableComboBox(QComboBox):
 
         # Store original items for filtering
         self._all_items: List[tuple] = []  # (display_text, data)
+        self._selected_data = None  # Currently selected data
+        self._is_filtering = False
 
-        # Setup completer for filtering
+        # Filter on text change
         self.lineEdit().textEdited.connect(self._filter_items)
 
-        # Clear filter when dropdown is shown
-        self.lineEdit().editingFinished.connect(self._restore_selection)
+        # Handle explicit selection (click or Enter in dropdown)
+        self.activated.connect(self._on_activated)
+
+        # Handle Enter in line edit
+        self.lineEdit().returnPressed.connect(self._on_return_pressed)
 
     def addItemWithData(self, text: str, data):
         """Add item and store for filtering"""
@@ -115,32 +123,22 @@ class SearchableComboBox(QComboBox):
     def clearItems(self):
         """Clear all items"""
         self._all_items.clear()
+        self._selected_data = None
         self.clear()
 
     def _filter_items(self, text: str):
         """Filter items based on search text"""
-        # Block signals to prevent index change events during filtering
+        self._is_filtering = True
+
+        # Clear and repopulate with filtered items
         self.blockSignals(True)
-
-        # Remember current selection
-        current_data = self.currentData()
-
-        # Clear and repopulate
         self.clear()
 
         filter_text = text.lower()
-        matched_index = -1
 
-        for i, (item_text, item_data) in enumerate(self._all_items):
+        for item_text, item_data in self._all_items:
             if not filter_text or filter_text in item_text.lower():
                 self.addItem(item_text, item_data)
-                if item_data and current_data and hasattr(item_data, 'id') and hasattr(current_data, 'id'):
-                    if item_data.id == current_data.id:
-                        matched_index = self.count() - 1
-
-        # Restore selection if found
-        if matched_index >= 0:
-            self.setCurrentIndex(matched_index)
 
         self.blockSignals(False)
 
@@ -148,19 +146,50 @@ class SearchableComboBox(QComboBox):
         if filter_text and self.count() > 0:
             self.showPopup()
 
-    def _restore_selection(self):
-        """Restore display text to selected item"""
-        if self.currentIndex() >= 0:
-            self.lineEdit().setText(self.currentText())
+        self._is_filtering = False
+
+    def _on_activated(self, index: int):
+        """Handle user selecting an item from dropdown"""
+        if index >= 0:
+            data = self.itemData(index)
+            self._selected_data = data
+            self.lineEdit().setText(self.itemText(index))
+            self.hidePopup()
+            self.itemSelected.emit(data)
+
+    def _on_return_pressed(self):
+        """Handle Enter key in line edit"""
+        # If dropdown is visible and has items, select first one
+        if self.count() > 0:
+            self._on_activated(0)
+
+    def selectedData(self):
+        """Get currently selected data"""
+        return self._selected_data
 
     def setCurrentByData(self, data):
         """Set current item by data object"""
+        self._selected_data = data
         for i in range(self.count()):
             item_data = self.itemData(i)
             if item_data and data and hasattr(item_data, 'id') and hasattr(data, 'id'):
                 if item_data.id == data.id:
+                    self.blockSignals(True)
                     self.setCurrentIndex(i)
+                    self.lineEdit().setText(self.itemText(i))
+                    self.blockSignals(False)
                     return
+
+    def resetFilter(self):
+        """Reset filter and show all items"""
+        self.blockSignals(True)
+        self.clear()
+        for item_text, item_data in self._all_items:
+            self.addItem(item_text, item_data)
+        # Restore selection
+        if self._selected_data:
+            self.setCurrentByData(self._selected_data)
+        self.blockSignals(False)
 
 
 class SignalBridge(QObject):
@@ -221,7 +250,7 @@ class StickerSearchApp(QWidget):
         self.chat_combo = SearchableComboBox()
         self.chat_combo.setMinimumWidth(350)
         self.chat_combo.lineEdit().setPlaceholderText("Search chats...")
-        self.chat_combo.currentIndexChanged.connect(self.on_chat_changed)
+        self.chat_combo.itemSelected.connect(self.on_chat_selected)
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setFixedWidth(30)
         self.refresh_btn.clicked.connect(self.refresh_chats)
@@ -499,8 +528,8 @@ class StickerSearchApp(QWidget):
             self.status_label.setText("Loading chats...")
             asyncio.run_coroutine_threadsafe(self._load_chats(), self.loop)
 
-    def on_chat_changed(self, index):
-        chat = self.chat_combo.itemData(index)
+    def on_chat_selected(self, chat):
+        """Handle chat selection from searchable combo"""
         if chat:
             self.selected_chat = chat
             self.save_state()
