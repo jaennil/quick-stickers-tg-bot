@@ -280,7 +280,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 			},
 		})
 	case "list":
-		b.sendStickerList(ctx, tgBot, chatID, userID, 1, messageID)
+		b.sendStickerListMsg(ctx, tgBot, chatID, userID, 1)
 	case "settings":
 		b.sendSettings(ctx, tgBot, chatID, userID, messageID)
 	case "stats":
@@ -1055,71 +1055,6 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 		Text:   msgBuilder.String(),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: buttons,
-		},
-	})
-}
-
-func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int, messageID int) {
-	offset := (page - 1) * constants.PerPage
-	total, _ := b.repo.GetUserStickerCount(userID)
-
-	if total == 0 {
-		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-			ChatID:    chatID,
-			MessageID: messageID,
-			Text:      "📋 У тебя пока нет сохранённых стикеров.\n\nОтправь мне стикер или добавь целый пак!",
-			ReplyMarkup: &models.InlineKeyboardMarkup{
-				InlineKeyboard: ui.EmptyListButtons(),
-			},
-		})
-		return
-	}
-
-	stickers, _ := b.repo.GetUserStickers(userID, constants.PerPage, offset)
-	totalPages := (total + constants.PerPage - 1) / constants.PerPage
-
-	for _, st := range stickers {
-		text := st.Text
-		if text == "" {
-			text = "(текст не распознан)"
-		}
-
-		// Build info line with engine/manual edit
-		var infoLine string
-		if st.ManualEdit {
-			infoLine = "✏️ отредактировано"
-		} else if st.OCREngine != "" {
-			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
-		}
-
-		tgBot.SendSticker(ctx, &bot.SendStickerParams{
-			ChatID:  chatID,
-			Sticker: &models.InputFileString{Data: st.FileID},
-		})
-
-		msgText := fmt.Sprintf("Текст: %s", text)
-		if infoLine != "" {
-			msgText += fmt.Sprintf("\n%s", infoLine)
-		}
-
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: chatID,
-			Text:   msgText,
-			ReplyMarkup: &models.InlineKeyboardMarkup{
-				InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(st.StickerID)},
-			},
-		})
-	}
-
-	navButtons := ui.PaginationButtons(page, totalPages, "list")
-	tgBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   fmt.Sprintf("📋 Стикеры (всего: %d)", total),
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{
-				navButtons,
-				ui.BackToMenuButton(),
-			},
 		},
 	})
 }
