@@ -17,13 +17,13 @@ type TelegramConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Driver string `yaml:"driver"` // "sqlite" or "postgres"
+	DSN    string `yaml:"dsn"`    // connection string or path for sqlite
 }
 
 type OCRConfig struct {
 	Engine       string   `yaml:"engine"`
 	SpaceAPIKeys []string `yaml:"space_api_keys"`
-	GoogleAPIKey string   `yaml:"google_api_key"`
 }
 
 func Load(path string) (*Config, error) {
@@ -38,8 +38,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Defaults
-	if cfg.Database.Path == "" {
-		cfg.Database.Path = "stickers.db"
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = "sqlite"
+	}
+	if cfg.Database.DSN == "" {
+		cfg.Database.DSN = "stickers.db"
 	}
 	if cfg.OCR.Engine == "" {
 		cfg.OCR.Engine = "paddle"

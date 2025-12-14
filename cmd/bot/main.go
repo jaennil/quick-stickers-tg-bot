@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,7 +11,9 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/bot"
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
-	"github.com/jaennil/sticker-search-bot/internal/storage"
+	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/repository/postgres"
+	"github.com/jaennil/sticker-search-bot/internal/repository/sqlite"
 )
 
 func main() {
@@ -23,27 +26,22 @@ func main() {
 		log.Fatal("telegram.token is required in config.yaml")
 	}
 
-	// Инициализируем OCR
+	repo, err := newRepository(cfg.Database)
+	if err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+	defer repo.Close()
+
 	ocrService := ocr.New(cfg.OCR.SpaceAPIKeys)
 
-	// Инициализируем хранилище
-	store, err := storage.New(cfg.Database.Path)
-	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
-	}
-	defer store.Close()
-
-	// Создаем бота
-	b, err := bot.New(cfg.Telegram.Token, store, ocrService)
+	b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
 
-	// Запускаем бота
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -53,4 +51,15 @@ func main() {
 	}()
 
 	b.Start(ctx)
+}
+
+func newRepository(cfg config.DatabaseConfig) (repository.Repository, error) {
+	switch cfg.Driver {
+	case "sqlite":
+		return sqlite.New(cfg.DSN)
+	case "postgres":
+		return postgres.New(cfg.DSN)
+	default:
+		return nil, fmt.Errorf("unknown database driver: %s", cfg.Driver)
+	}
 }

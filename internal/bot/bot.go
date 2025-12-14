@@ -18,12 +18,12 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
-	"github.com/jaennil/sticker-search-bot/internal/storage"
+	"github.com/jaennil/sticker-search-bot/internal/repository"
 )
 
 type Bot struct {
 	bot              *bot.Bot
-	storage          *storage.Storage
+	repo             repository.Repository
 	ocr              *ocr.OCR
 	lastSticker      map[int64]string // userID -> stickerID
 	lastStickerMu    sync.RWMutex
@@ -39,9 +39,9 @@ type Bot struct {
 	pendingOCRMu     sync.RWMutex
 }
 
-func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
+func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 	b := &Bot{
-		storage:         storage,
+		repo:            repo,
 		ocr:             ocr,
 		lastSticker:     make(map[int64]string),
 		awaitingEdit:    make(map[int64]bool),
@@ -116,7 +116,7 @@ func (b *Bot) sendMainMenu(ctx context.Context, tgBot *bot.Bot, chatID int64) {
 }
 
 func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64) {
-	currentEngine := b.storage.GetUserOCREngine(userID)
+	currentEngine := b.repo.GetUserOCREngine(userID)
 
 	engines := []struct {
 		name  string
@@ -152,7 +152,7 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	const perPage = 5
 	offset := (page - 1) * perPage
 
-	total, _ := b.storage.GetUserStickerCount(userID)
+	total, _ := b.repo.GetUserStickerCount(userID)
 	if total == 0 {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
@@ -161,7 +161,7 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 		return
 	}
 
-	stickers, _ := b.storage.GetUserStickers(userID, perPage, offset)
+	stickers, _ := b.repo.GetUserStickers(userID, perPage, offset)
 	totalPages := (total + perPage - 1) / perPage
 
 	// Отправляем стикеры
@@ -262,7 +262,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 		b.sendSettings(ctx, tgBot, chatID, userID, messageID)
 
 	case "stats":
-		count, err := b.storage.GetUserStickerCount(userID)
+		count, err := b.repo.GetUserStickerCount(userID)
 		if err != nil {
 			count = 0
 		}
@@ -305,7 +305,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 }
 
 func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, messageID int) {
-	currentEngine := b.storage.GetUserOCREngine(userID)
+	currentEngine := b.repo.GetUserOCREngine(userID)
 
 	engines := []struct {
 		name  string
@@ -345,7 +345,7 @@ func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64,
 	const perPage = 5
 	offset := (page - 1) * perPage
 
-	total, _ := b.storage.GetUserStickerCount(userID)
+	total, _ := b.repo.GetUserStickerCount(userID)
 	if total == 0 {
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
@@ -361,7 +361,7 @@ func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64,
 		return
 	}
 
-	stickers, _ := b.storage.GetUserStickers(userID, perPage, offset)
+	stickers, _ := b.repo.GetUserStickers(userID, perPage, offset)
 	totalPages := (total + perPage - 1) / perPage
 
 	// Отправляем стикеры
@@ -458,7 +458,7 @@ func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 }
 
 func (b *Bot) handleStats(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	count, err := b.storage.GetUserStickerCount(update.Message.From.ID)
+	count, err := b.repo.GetUserStickerCount(update.Message.From.ID)
 	if err != nil {
 		log.Printf("Error getting stats: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -493,7 +493,7 @@ func (b *Bot) handleList(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	offset := (page - 1) * perPage
 
 	// Получаем общее количество
-	total, err := b.storage.GetUserStickerCount(userID)
+	total, err := b.repo.GetUserStickerCount(userID)
 	if err != nil {
 		log.Printf("Error getting sticker count: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -512,7 +512,7 @@ func (b *Bot) handleList(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	}
 
 	// Получаем стикеры
-	stickers, err := b.storage.GetUserStickers(userID, perPage, offset)
+	stickers, err := b.repo.GetUserStickers(userID, perPage, offset)
 	if err != nil {
 		log.Printf("Error getting stickers: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -581,7 +581,7 @@ func (b *Bot) handleList(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 
 func (b *Bot) handleSettings(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
-	currentEngine := b.storage.GetUserOCREngine(userID)
+	currentEngine := b.repo.GetUserOCREngine(userID)
 
 	engines := []struct {
 		name  string
@@ -636,7 +636,7 @@ func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *mod
 	}
 
 	// Сохраняем выбор
-	if err := b.storage.SetUserOCREngine(userID, engine); err != nil {
+	if err := b.repo.SetUserOCREngine(userID, engine); err != nil {
 		log.Printf("Error saving OCR engine: %v", err)
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
@@ -716,7 +716,7 @@ func (b *Bot) handleSelectOCRCallback(ctx context.Context, tgBot *bot.Bot, updat
 	text := results[engine]
 
 	// Сохраняем выбранный текст
-	if err := b.storage.UpdateStickerText(userID, stickerID, text); err != nil {
+	if err := b.repo.UpdateStickerText(userID, stickerID, text); err != nil {
 		log.Printf("Error updating sticker text: %v", err)
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
@@ -763,7 +763,7 @@ func (b *Bot) handleSearch(ctx context.Context, tgBot *bot.Bot, update *models.U
 		return
 	}
 
-	stickers, err := b.storage.SearchByText(update.Message.From.ID, query)
+	stickers, err := b.repo.SearchByText(update.Message.From.ID, query)
 	if err != nil {
 		log.Printf("Error searching: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -815,7 +815,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	}
 
 	userID := update.Message.From.ID
-	ocrEngine := b.storage.GetUserOCREngine(userID)
+	ocrEngine := b.repo.GetUserOCREngine(userID)
 
 	// Проверяем, нет ли уже активной индексации
 	b.activeIndexingMu.RLock()
@@ -908,7 +908,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 				fileURL := tgBot.FileDownloadLink(file)
 				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
 
-				s := &storage.Sticker{
+				s := &repository.Sticker{
 					UserID:    userID,
 					StickerID: sticker.FileUniqueID,
 					SetName:   setName,
@@ -917,7 +917,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 					Emoji:     sticker.Emoji,
 				}
 
-				if err := b.storage.SaveSticker(s); err == nil {
+				if err := b.repo.SaveSticker(s); err == nil {
 					processed.Add(1)
 					if text != "" {
 						withText.Add(1)
@@ -1020,7 +1020,7 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	}
 
 	// Обновляем текст
-	if err := b.storage.UpdateStickerText(userID, stickerID, newText); err != nil {
+	if err := b.repo.UpdateStickerText(userID, stickerID, newText); err != nil {
 		log.Printf("Error updating sticker text: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -1039,7 +1039,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	setName := strings.TrimPrefix(update.CallbackQuery.Data, "addpack:")
 	userID := update.CallbackQuery.From.ID
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
-	ocrEngine := b.storage.GetUserOCREngine(userID)
+	ocrEngine := b.repo.GetUserOCREngine(userID)
 
 	// Проверяем, нет ли уже активной индексации
 	b.activeIndexingMu.RLock()
@@ -1138,7 +1138,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 				fileURL := tgBot.FileDownloadLink(file)
 				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
 
-				s := &storage.Sticker{
+				s := &repository.Sticker{
 					UserID:    userID,
 					StickerID: sticker.FileUniqueID,
 					SetName:   setName,
@@ -1147,7 +1147,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 					Emoji:     sticker.Emoji,
 				}
 
-				if err := b.storage.SaveSticker(s); err == nil {
+				if err := b.repo.SaveSticker(s); err == nil {
 					processed.Add(1)
 					if text != "" {
 						withText.Add(1)
@@ -1338,7 +1338,7 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 
 	case "📊 Статистика":
-		count, _ := b.storage.GetUserStickerCount(userID)
+		count, _ := b.repo.GetUserStickerCount(userID)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   fmt.Sprintf("📊 Статистика\n\nСохранено стикеров: %d", count),
@@ -1432,7 +1432,7 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 	}
 
 	// Обновляем текст
-	if err := b.storage.UpdateStickerText(userID, stickerID, newText); err != nil {
+	if err := b.repo.UpdateStickerText(userID, stickerID, newText); err != nil {
 		log.Printf("Error updating sticker text: %v", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -1524,7 +1524,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	b.lastStickerMu.Unlock()
 
 	// Сохраняем стикер в базу (пока без текста)
-	s := &storage.Sticker{
+	s := &repository.Sticker{
 		UserID:    userID,
 		StickerID: sticker.FileUniqueID,
 		SetName:   sticker.SetName,
@@ -1532,7 +1532,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		Text:      "",
 		Emoji:     sticker.Emoji,
 	}
-	if err := b.storage.SaveSticker(s); err != nil {
+	if err := b.repo.SaveSticker(s); err != nil {
 		log.Printf("Error saving sticker: %v", err)
 	}
 
@@ -1591,7 +1591,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 		return
 	}
 
-	stickers, err := b.storage.SearchByText(update.Message.From.ID, query)
+	stickers, err := b.repo.SearchByText(update.Message.From.ID, query)
 	if err != nil {
 		return
 	}
@@ -1701,7 +1701,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 		return
 	}
 
-	stickers, err := b.storage.SearchByText(userID, query)
+	stickers, err := b.repo.SearchByText(userID, query)
 	if err != nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
@@ -1773,7 +1773,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 		return
 	}
 
-	ocrEngine := b.storage.GetUserOCREngine(userID)
+	ocrEngine := b.repo.GetUserOCREngine(userID)
 
 	// Проверяем, нет ли уже активной индексации
 	b.activeIndexingMu.RLock()
@@ -1870,7 +1870,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 				fileURL := tgBot.FileDownloadLink(file)
 				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
 
-				s := &storage.Sticker{
+				s := &repository.Sticker{
 					UserID:    userID,
 					StickerID: sticker.FileUniqueID,
 					SetName:   setName,
@@ -1879,7 +1879,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 					Emoji:     sticker.Emoji,
 				}
 
-				if err := b.storage.SaveSticker(s); err == nil {
+				if err := b.repo.SaveSticker(s); err == nil {
 					processed.Add(1)
 					if text != "" {
 						withText.Add(1)
