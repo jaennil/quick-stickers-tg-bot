@@ -157,6 +157,38 @@ func (r *BaseRepository) DeleteSticker(userID int64, stickerID string) error {
 	return err
 }
 
+func (r *BaseRepository) GetUserPackStats(userID int64) ([]*PackStats, error) {
+	query := r.db.Rebind(`
+		SELECT
+			set_name,
+			COUNT(*) as total,
+			SUM(CASE WHEN ocr_engine = 'api' THEN 1 ELSE 0 END) as by_api,
+			SUM(CASE WHEN ocr_engine = 'paddle' THEN 1 ELSE 0 END) as by_paddle,
+			SUM(CASE WHEN ocr_engine = 'easy' THEN 1 ELSE 0 END) as by_easy,
+			SUM(CASE WHEN ocr_engine = 'tesseract' THEN 1 ELSE 0 END) as by_tesseract,
+			SUM(CASE WHEN manual_edit = TRUE THEN 1 ELSE 0 END) as manual_edited
+		FROM stickers
+		WHERE user_id = ? AND set_name != ''
+		GROUP BY set_name
+		ORDER BY total DESC
+	`)
+	rows, err := r.db.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []*PackStats
+	for rows.Next() {
+		var s PackStats
+		if err := rows.Scan(&s.SetName, &s.Total, &s.ByAPI, &s.ByPaddle, &s.ByEasy, &s.ByTesseract, &s.ManualEdited); err != nil {
+			return nil, err
+		}
+		stats = append(stats, &s)
+	}
+	return stats, rows.Err()
+}
+
 func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
 	query := r.db.Rebind(`
 		INSERT INTO sticker_thumbnails (file_id, thumbnail) VALUES (?, ?)

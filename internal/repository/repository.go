@@ -12,6 +12,16 @@ type Sticker struct {
 	ManualEdit bool
 }
 
+type PackStats struct {
+	SetName       string
+	Total         int
+	ByAPI         int
+	ByPaddle      int
+	ByEasy        int
+	ByTesseract   int
+	ManualEdited  int
+}
+
 type Repository interface {
 	// Stickers
 	SaveSticker(sticker *Sticker) error
@@ -21,6 +31,7 @@ type Repository interface {
 	GetStickersBySetName(userID int64, setName string) (map[string]*Sticker, error)
 	UpdateStickerText(userID int64, stickerID string, text string) error
 	DeleteSticker(userID int64, stickerID string) error
+	GetUserPackStats(userID int64) ([]*PackStats, error)
 
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error

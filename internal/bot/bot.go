@@ -45,6 +45,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler("list:", bot.MatchTypePrefix, b.handleListCallback),
 		bot.WithCallbackQueryDataHandler("fallback:", bot.MatchTypePrefix, b.handleFallbackCallback),
 		bot.WithCallbackQueryDataHandler("delete:", bot.MatchTypePrefix, b.handleDeleteCallback),
+		bot.WithCallbackQueryDataHandler("allstickers:", bot.MatchTypePrefix, b.handleAllStickersCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -523,6 +524,93 @@ func (b *Bot) handleListCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	b.sendStickerListMsg(ctx, tgBot, chatID, userID, page)
 }
 
+func (b *Bot) handleAllStickersCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	pageStr := strings.TrimPrefix(update.CallbackQuery.Data, "allstickers:")
+	userID := update.CallbackQuery.From.ID
+	logger.Log.Infow("[CALLBACK] allstickers", "page", pageStr, "user", userID)
+
+	if pageStr == "noop" {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+		})
+		return
+	}
+
+	var page int
+	fmt.Sscanf(pageStr, "%d", &page)
+	if page < 1 {
+		page = 1
+	}
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	b.sendAllStickers(ctx, tgBot, chatID, userID, page)
+}
+
+func (b *Bot) sendAllStickers(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int) {
+	offset := (page - 1) * constants.PerPage
+	total, _ := b.repo.GetUserStickerCount(userID)
+
+	if total == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "📋 У тебя пока нет сохранённых стикеров.",
+		})
+		return
+	}
+
+	stickers, _ := b.repo.GetUserStickers(userID, constants.PerPage, offset)
+	totalPages := (total + constants.PerPage - 1) / constants.PerPage
+
+	for _, st := range stickers {
+		text := st.Text
+		if text == "" {
+			text = "(текст не распознан)"
+		}
+
+		// Build info line with engine/manual edit
+		var infoLine string
+		if st.ManualEdit {
+			infoLine = "✏️ отредактировано"
+		} else if st.OCREngine != "" {
+			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
+		}
+
+		tgBot.SendSticker(ctx, &bot.SendStickerParams{
+			ChatID:  chatID,
+			Sticker: &models.InputFileString{Data: st.FileID},
+		})
+
+		msgText := fmt.Sprintf("Текст: %s", text)
+		if infoLine != "" {
+			msgText += fmt.Sprintf("\n%s", infoLine)
+		}
+
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   msgText,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(st.StickerID)},
+			},
+		})
+	}
+
+	navButtons := ui.PaginationButtons(page, totalPages, "allstickers")
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("📋 Стикеры (страница %d/%d, всего: %d)", page, totalPages, total),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				navButtons,
+				ui.BackToMenuButton(),
+			},
+		},
+	})
+}
+
 func (b *Bot) handleFallbackCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	// Format: fallback:engine:setName
 	data := strings.TrimPrefix(update.CallbackQuery.Data, "fallback:")
@@ -797,7 +885,6 @@ func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, us
 }
 
 func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int) {
-	offset := (page - 1) * constants.PerPage
 	total, _ := b.repo.GetUserStickerCount(userID)
 
 	if total == 0 {
@@ -808,48 +895,51 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 		return
 	}
 
-	stickers, _ := b.repo.GetUserStickers(userID, constants.PerPage, offset)
-	totalPages := (total + constants.PerPage - 1) / constants.PerPage
-
-	for _, st := range stickers {
-		text := st.Text
-		if text == "" {
-			text = "(текст не распознан)"
-		}
-
-		// Build info line with engine/manual edit
-		var infoLine string
-		if st.ManualEdit {
-			infoLine = "✏️ отредактировано"
-		} else if st.OCREngine != "" {
-			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
-		}
-
-		tgBot.SendSticker(ctx, &bot.SendStickerParams{
-			ChatID:  chatID,
-			Sticker: &models.InputFileString{Data: st.FileID},
-		})
-
-		msgText := fmt.Sprintf("Текст: %s", text)
-		if infoLine != "" {
-			msgText += fmt.Sprintf("\n%s", infoLine)
-		}
-
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: chatID,
-			Text:   msgText,
-			ReplyMarkup: &models.InlineKeyboardMarkup{
-				InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(st.StickerID)},
-			},
-		})
+	// Show pack statistics
+	packStats, err := b.repo.GetUserPackStats(userID)
+	if err != nil {
+		logger.Log.Errorw("[LIST] error getting pack stats", "user", userID, "error", err)
 	}
 
-	navButtons := ui.PaginationButtons(page, totalPages, "list")
+	var msgBuilder strings.Builder
+	msgBuilder.WriteString(fmt.Sprintf("📋 Мои стикеры (всего: %d)\n\n", total))
+
+	if len(packStats) > 0 {
+		msgBuilder.WriteString("📦 Паки:\n\n")
+		for _, ps := range packStats {
+			msgBuilder.WriteString(fmt.Sprintf("• %s — %d шт.\n", ps.SetName, ps.Total))
+			// Show engine breakdown
+			var engines []string
+			if ps.ByAPI > 0 {
+				engines = append(engines, fmt.Sprintf("☁️ api: %d", ps.ByAPI))
+			}
+			if ps.ByPaddle > 0 {
+				engines = append(engines, fmt.Sprintf("🔷 paddle: %d", ps.ByPaddle))
+			}
+			if ps.ByEasy > 0 {
+				engines = append(engines, fmt.Sprintf("🔶 easy: %d", ps.ByEasy))
+			}
+			if ps.ByTesseract > 0 {
+				engines = append(engines, fmt.Sprintf("📦 tesseract: %d", ps.ByTesseract))
+			}
+			if ps.ManualEdited > 0 {
+				engines = append(engines, fmt.Sprintf("✏️ ручные: %d", ps.ManualEdited))
+			}
+			if len(engines) > 0 {
+				msgBuilder.WriteString("  " + strings.Join(engines, ", ") + "\n")
+			}
+			msgBuilder.WriteString("\n")
+		}
+	}
+
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   fmt.Sprintf("📋 Стикеры (всего: %d)", total),
+		Text:   msgBuilder.String(),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{navButtons},
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "📜 Все стикеры", CallbackData: "allstickers:1"}},
+				ui.BackToMenuButton(),
+			},
 		},
 	})
 }
