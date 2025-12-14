@@ -13,28 +13,46 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
 type OCR struct {
-	apiKey       string
+	apiKeys      []string
+	apiKeyIndex  int
+	apiKeyMu     sync.Mutex
 	googleAPIKey string
 	client       *http.Client
 }
 
 func New() *OCR {
-	apiKey := os.Getenv("OCR_API_KEY")
-	if apiKey == "" {
-		apiKey = "helloworld" // тестовый ключ (лимитированный)
+	// Собираем все токены OCR.space
+	apiKeys := []string{
 	}
+
+	// Добавляем токен из env если есть
+	if envKey := os.Getenv("OCR_API_KEY"); envKey != "" {
+		apiKeys = append([]string{envKey}, apiKeys...)
+	}
+
 	googleAPIKey := os.Getenv("GOOGLE_VISION_API_KEY")
 	return &OCR{
-		apiKey:       apiKey,
+		apiKeys:      apiKeys,
 		googleAPIKey: googleAPIKey,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// getNextAPIKey возвращает следующий API ключ (ротация)
+func (o *OCR) getNextAPIKey() string {
+	o.apiKeyMu.Lock()
+	defer o.apiKeyMu.Unlock()
+
+	key := o.apiKeys[o.apiKeyIndex]
+	o.apiKeyIndex = (o.apiKeyIndex + 1) % len(o.apiKeys)
+	return key
 }
 
 type ocrSpaceResponse struct {
@@ -152,7 +170,7 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 	}
 
 	// Добавляем параметры
-	writer.WriteField("apikey", o.apiKey)
+	writer.WriteField("apikey", o.getNextAPIKey())
 	writer.WriteField("language", "rus")      // русский + английский
 	writer.WriteField("isOverlayRequired", "false")
 	writer.WriteField("OCREngine", "2")       // Engine 2 лучше для сложных изображений
@@ -216,7 +234,7 @@ func cleanText(text string) string {
 
 // IsAvailable проверяет доступен ли OCR API
 func (o *OCR) IsAvailable() bool {
-	return o.apiKey != ""
+	return len(o.apiKeys) > 0
 }
 
 // recognizeViaTesseract - fallback на локальный Tesseract

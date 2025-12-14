@@ -22,13 +22,17 @@ import (
 )
 
 type Bot struct {
-	bot            *bot.Bot
-	storage        *storage.Storage
-	ocr            *ocr.OCR
-	lastSticker    map[int64]string // userID -> stickerID
-	lastStickerMu  sync.RWMutex
-	awaitingEdit   map[int64]bool // userID -> waiting for edit text
-	awaitingEditMu sync.RWMutex
+	bot              *bot.Bot
+	storage          *storage.Storage
+	ocr              *ocr.OCR
+	lastSticker      map[int64]string // userID -> stickerID
+	lastStickerMu    sync.RWMutex
+	awaitingEdit     map[int64]bool // userID -> waiting for edit text
+	awaitingEditMu   sync.RWMutex
+	awaitingSearch   map[int64]bool // userID -> waiting for search text
+	awaitingSearchMu sync.RWMutex
+	awaitingAddpack   map[int64]bool // userID -> waiting for pack name
+	awaitingAddpackMu sync.RWMutex
 	activeIndexing   map[int64]context.CancelFunc // userID -> cancel function
 	activeIndexingMu sync.RWMutex
 	pendingOCR       map[string]map[string]string // stickerID -> engine -> text
@@ -37,21 +41,25 @@ type Bot struct {
 
 func New(token string, storage *storage.Storage, ocr *ocr.OCR) (*Bot, error) {
 	b := &Bot{
-		storage:        storage,
-		ocr:            ocr,
-		lastSticker:    make(map[int64]string),
-		awaitingEdit:   make(map[int64]bool),
-		activeIndexing: make(map[int64]context.CancelFunc),
-		pendingOCR:     make(map[string]map[string]string),
+		storage:         storage,
+		ocr:             ocr,
+		lastSticker:     make(map[int64]string),
+		awaitingEdit:    make(map[int64]bool),
+		awaitingSearch:  make(map[int64]bool),
+		awaitingAddpack: make(map[int64]bool),
+		activeIndexing:  make(map[int64]context.CancelFunc),
+		pendingOCR:      make(map[string]map[string]string),
 	}
 
 	opts := []bot.Option{
 		bot.WithDefaultHandler(b.defaultHandler),
+		bot.WithCallbackQueryDataHandler("menu:", bot.MatchTypePrefix, b.handleMenuCallback),
 		bot.WithCallbackQueryDataHandler("addpack:", bot.MatchTypePrefix, b.handleAddPackCallback),
 		bot.WithCallbackQueryDataHandler("edit:", bot.MatchTypePrefix, b.handleEditCallback),
 		bot.WithCallbackQueryDataHandler("cancel:", bot.MatchTypePrefix, b.handleCancelCallback),
 		bot.WithCallbackQueryDataHandler("ocr:", bot.MatchTypePrefix, b.handleOCRCallback),
 		bot.WithCallbackQueryDataHandler("selectocr:", bot.MatchTypePrefix, b.handleSelectOCRCallback),
+		bot.WithCallbackQueryDataHandler("list:", bot.MatchTypePrefix, b.handleListCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -82,25 +90,348 @@ func (b *Bot) Start(ctx context.Context) {
 }
 
 func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	b.sendMainMenu(ctx, tgBot, update.Message.Chat.ID)
+}
+
+func (b *Bot) sendMainMenu(ctx context.Context, tgBot *bot.Bot, chatID int64) {
 	msg := `Привет! Я помогу найти нужный стикер по тексту.
 
-Как использовать:
-1. Перешли мне стикер — я распознаю текст и сохраню
-2. /addpack <имя_пака> — добавить весь стикер-пак
-3. /search <текст> — найду стикеры с этим текстом
+Отправь мне стикер — я распознаю текст и сохраню его.
+Потом сможешь искать стикеры по тексту!`
 
-Команды:
-/help — помощь
-/stats — статистика
-/settings — выбрать OCR движок
-/search <текст> — поиск
-/addpack <имя_пака> — добавить пак
-/edit <текст> — исправить текст последнего стикера`
+	keyboard := &models.ReplyKeyboardMarkup{
+		Keyboard: [][]models.KeyboardButton{
+			{{Text: "🔍 Поиск"}, {Text: "📦 Добавить пак"}},
+			{{Text: "📋 Мои стикеры"}, {Text: "⚙️ Настройки"}},
+			{{Text: "📊 Статистика"}, {Text: "❓ Помощь"}},
+		},
+		ResizeKeyboard: true,
+	}
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   msg,
+		ChatID:      chatID,
+		Text:        msg,
+		ReplyMarkup: keyboard,
 	})
+}
+
+func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64) {
+	currentEngine := b.storage.GetUserOCREngine(userID)
+
+	engines := []struct {
+		name  string
+		label string
+	}{
+		{"paddle", "PaddleOCR"},
+		{"easy", "EasyOCR"},
+		{"api", "OCR.space"},
+		{"tesseract", "Tesseract"},
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+	for _, e := range engines {
+		label := e.label
+		if e.name == currentEngine {
+			label = "✓ " + label
+		}
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: label, CallbackData: "ocr:" + e.name},
+		})
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("⚙️ Настройки\n\nТекущий OCR движок: %s\n\nВыбери движок для распознавания:", currentEngine),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
+}
+
+func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int) {
+	const perPage = 5
+	offset := (page - 1) * perPage
+
+	total, _ := b.storage.GetUserStickerCount(userID)
+	if total == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "📋 У тебя пока нет сохранённых стикеров.\n\nОтправь мне стикер или добавь целый пак!",
+		})
+		return
+	}
+
+	stickers, _ := b.storage.GetUserStickers(userID, perPage, offset)
+	totalPages := (total + perPage - 1) / perPage
+
+	// Отправляем стикеры
+	for _, st := range stickers {
+		text := st.Text
+		if text == "" {
+			text = "(текст не распознан)"
+		}
+
+		tgBot.SendSticker(ctx, &bot.SendStickerParams{
+			ChatID:  chatID,
+			Sticker: &models.InputFileString{Data: st.FileID},
+		})
+
+		info := fmt.Sprintf("Текст: %s", text)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   info,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "✏️ Изменить текст", CallbackData: "edit:" + st.StickerID}},
+				},
+			},
+		})
+	}
+
+	// Навигация
+	var navButtons []models.InlineKeyboardButton
+	if page > 1 {
+		navButtons = append(navButtons, models.InlineKeyboardButton{Text: "◀️", CallbackData: fmt.Sprintf("list:%d", page-1)})
+	}
+	navButtons = append(navButtons, models.InlineKeyboardButton{Text: fmt.Sprintf("%d/%d", page, totalPages), CallbackData: "list:noop"})
+	if page < totalPages {
+		navButtons = append(navButtons, models.InlineKeyboardButton{Text: "▶️", CallbackData: fmt.Sprintf("list:%d", page+1)})
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("📋 Стикеры (всего: %d)", total),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				navButtons,
+			},
+		},
+	})
+}
+
+func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	action := strings.TrimPrefix(update.CallbackQuery.Data, "menu:")
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+	messageID := update.CallbackQuery.Message.Message.ID
+	userID := update.CallbackQuery.From.ID
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	switch action {
+	case "main":
+		b.sendMainMenu(ctx, tgBot, chatID)
+
+	case "search":
+		b.awaitingSearchMu.Lock()
+		b.awaitingSearch[userID] = true
+		b.awaitingSearchMu.Unlock()
+
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      "🔍 Введи текст для поиска:",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ Назад", CallbackData: "menu:main"}},
+				},
+			},
+		})
+
+	case "addpack":
+		b.awaitingAddpackMu.Lock()
+		b.awaitingAddpack[userID] = true
+		b.awaitingAddpackMu.Unlock()
+
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      "📦 Введи имя стикер-пака:\n\nИмя пака можно узнать, отправив мне любой стикер из него.",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ Назад", CallbackData: "menu:main"}},
+				},
+			},
+		})
+
+	case "list":
+		b.sendStickerList(ctx, tgBot, chatID, userID, 1, messageID)
+
+	case "settings":
+		b.sendSettings(ctx, tgBot, chatID, userID, messageID)
+
+	case "stats":
+		count, err := b.storage.GetUserStickerCount(userID)
+		if err != nil {
+			count = 0
+		}
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      fmt.Sprintf("📊 Статистика\n\nСохранено стикеров: %d", count),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ Назад", CallbackData: "menu:main"}},
+				},
+			},
+		})
+
+	case "help":
+		msg := `❓ Помощь
+
+Как добавить стикеры:
+• Отправь мне стикер — добавлю один
+• Нажми "📦 Добавить пак" — добавлю весь пак
+
+Как искать:
+• Нажми "🔍 Поиск" и введи текст
+• Или просто напиши текст — тоже найду!
+
+Как исправить текст:
+• В списке стикеров нажми "✏️ Изменить текст"`
+
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      msg,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ Назад", CallbackData: "menu:main"}},
+				},
+			},
+		})
+	}
+}
+
+func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, messageID int) {
+	currentEngine := b.storage.GetUserOCREngine(userID)
+
+	engines := []struct {
+		name  string
+		label string
+	}{
+		{"paddle", "PaddleOCR"},
+		{"easy", "EasyOCR"},
+		{"api", "OCR.space"},
+		{"tesseract", "Tesseract"},
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+	for _, e := range engines {
+		label := e.label
+		if e.name == currentEngine {
+			label = "✓ " + label
+		}
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: label, CallbackData: "ocr:" + e.name},
+		})
+	}
+	buttons = append(buttons, []models.InlineKeyboardButton{
+		{Text: "◀️ Назад", CallbackData: "menu:main"},
+	})
+
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("⚙️ Настройки\n\nТекущий OCR движок: %s\n\nВыбери движок для распознавания:", currentEngine),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
+}
+
+func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int, messageID int) {
+	const perPage = 5
+	offset := (page - 1) * perPage
+
+	total, _ := b.storage.GetUserStickerCount(userID)
+	if total == 0 {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      "📋 У тебя пока нет сохранённых стикеров.\n\nОтправь мне стикер или добавь целый пак!",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "📦 Добавить пак", CallbackData: "menu:addpack"}},
+					{{Text: "◀️ Назад", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	stickers, _ := b.storage.GetUserStickers(userID, perPage, offset)
+	totalPages := (total + perPage - 1) / perPage
+
+	// Отправляем стикеры
+	for _, st := range stickers {
+		text := st.Text
+		if text == "" {
+			text = "(текст не распознан)"
+		}
+
+		tgBot.SendSticker(ctx, &bot.SendStickerParams{
+			ChatID:  chatID,
+			Sticker: &models.InputFileString{Data: st.FileID},
+		})
+
+		info := fmt.Sprintf("Текст: %s", text)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   info,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "✏️ Изменить текст", CallbackData: "edit:" + st.StickerID}},
+				},
+			},
+		})
+	}
+
+	// Навигация
+	var navButtons []models.InlineKeyboardButton
+	if page > 1 {
+		navButtons = append(navButtons, models.InlineKeyboardButton{Text: "◀️", CallbackData: fmt.Sprintf("list:%d", page-1)})
+	}
+	navButtons = append(navButtons, models.InlineKeyboardButton{Text: fmt.Sprintf("%d/%d", page, totalPages), CallbackData: "list:noop"})
+	if page < totalPages {
+		navButtons = append(navButtons, models.InlineKeyboardButton{Text: "▶️", CallbackData: fmt.Sprintf("list:%d", page+1)})
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("📋 Стикеры (всего: %d)", total),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				navButtons,
+				{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+			},
+		},
+	})
+}
+
+func (b *Bot) handleListCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	pageStr := strings.TrimPrefix(update.CallbackQuery.Data, "list:")
+	if pageStr == "noop" {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+		})
+		return
+	}
+
+	page, _ := strconv.Atoi(pageStr)
+	if page < 1 {
+		page = 1
+	}
+
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	b.sendStickerListMsg(ctx, tgBot, chatID, userID, page)
 }
 
 func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -973,19 +1304,107 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 	}
 
 	userID := update.Message.From.ID
+	chatID := update.Message.Chat.ID
+	text := update.Message.Text
+
+	// Обработка кнопок меню
+	switch text {
+	case "🔍 Поиск":
+		b.awaitingSearchMu.Lock()
+		b.awaitingSearch[userID] = true
+		b.awaitingSearchMu.Unlock()
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "🔍 Введи текст для поиска:",
+		})
+		return
+
+	case "📦 Добавить пак":
+		b.awaitingAddpackMu.Lock()
+		b.awaitingAddpack[userID] = true
+		b.awaitingAddpackMu.Unlock()
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "📦 Введи имя стикер-пака:\n\nИмя пака можно узнать, отправив мне любой стикер из него.",
+		})
+		return
+
+	case "📋 Мои стикеры":
+		b.sendStickerListMsg(ctx, tgBot, chatID, userID, 1)
+		return
+
+	case "⚙️ Настройки":
+		b.sendSettingsMsg(ctx, tgBot, chatID, userID)
+		return
+
+	case "📊 Статистика":
+		count, _ := b.storage.GetUserStickerCount(userID)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("📊 Статистика\n\nСохранено стикеров: %d", count),
+		})
+		return
+
+	case "❓ Помощь":
+		msg := `❓ Помощь
+
+Как добавить стикеры:
+• Отправь мне стикер — добавлю один
+• Нажми "📦 Добавить пак" — добавлю весь пак
+
+Как искать:
+• Нажми "🔍 Поиск" и введи текст
+• Или просто напиши текст — тоже найду!
+
+Как исправить текст:
+• В списке стикеров нажми "✏️ Изменить текст"`
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   msg,
+		})
+		return
+	}
 
 	// Проверяем режим ожидания редактирования
 	b.awaitingEditMu.RLock()
-	awaiting := b.awaitingEdit[userID]
+	awaitingEdit := b.awaitingEdit[userID]
 	b.awaitingEditMu.RUnlock()
 
-	if awaiting && update.Message.Text != "" && !strings.HasPrefix(update.Message.Text, "/") {
+	if awaitingEdit && text != "" && !strings.HasPrefix(text, "/") {
 		b.handleAwaitingEdit(ctx, tgBot, update)
 		return
 	}
 
+	// Проверяем режим ожидания поиска
+	b.awaitingSearchMu.RLock()
+	awaitingSearch := b.awaitingSearch[userID]
+	b.awaitingSearchMu.RUnlock()
+
+	if awaitingSearch && text != "" && !strings.HasPrefix(text, "/") {
+		b.awaitingSearchMu.Lock()
+		delete(b.awaitingSearch, userID)
+		b.awaitingSearchMu.Unlock()
+
+		b.doSearch(ctx, tgBot, chatID, userID, text)
+		return
+	}
+
+	// Проверяем режим ожидания добавления пака
+	b.awaitingAddpackMu.RLock()
+	awaitingAddpack := b.awaitingAddpack[userID]
+	b.awaitingAddpackMu.RUnlock()
+
+	if awaitingAddpack && text != "" && !strings.HasPrefix(text, "/") {
+		b.awaitingAddpackMu.Lock()
+		delete(b.awaitingAddpack, userID)
+		b.awaitingAddpackMu.Unlock()
+
+		b.doAddPack(ctx, tgBot, chatID, userID, strings.TrimSpace(text))
+		return
+	}
+
 	// Обработка текстового поиска без команды
-	if update.Message.Text != "" && !strings.HasPrefix(update.Message.Text, "/") {
+	if text != "" && !strings.HasPrefix(text, "/") {
 		b.handleTextSearch(ctx, tgBot, update)
 	}
 }
@@ -1265,4 +1684,283 @@ func progressBar(current, total int) string {
 	}
 	bar += "]"
 	return bar
+}
+
+func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, query string) {
+	query = strings.TrimSpace(query)
+	if len(query) < 2 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Слишком короткий запрос. Введи минимум 2 символа.",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	stickers, err := b.storage.SearchByText(userID, query)
+	if err != nil {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Ошибка при поиске",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	if len(stickers) == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "🔍 Искать ещё", CallbackData: "menu:search"}},
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	// Отправляем найденные стикеры (максимум 10)
+	limit := 10
+	if len(stickers) < limit {
+		limit = len(stickers)
+	}
+
+	for i := 0; i < limit; i++ {
+		tgBot.SendSticker(ctx, &bot.SendStickerParams{
+			ChatID:  chatID,
+			Sticker: &models.InputFileString{Data: stickers[i].FileID},
+		})
+	}
+
+	msg := fmt.Sprintf("Найдено: %d", len(stickers))
+	if len(stickers) > 10 {
+		msg = fmt.Sprintf("Показано 10 из %d найденных", len(stickers))
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   msg,
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "🔍 Искать ещё", CallbackData: "menu:search"}},
+				{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+			},
+		},
+	})
+}
+
+func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, setName string) {
+	if setName == "" {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Имя пака не может быть пустым",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	ocrEngine := b.storage.GetUserOCREngine(userID)
+
+	// Проверяем, нет ли уже активной индексации
+	b.activeIndexingMu.RLock()
+	_, exists := b.activeIndexing[userID]
+	b.activeIndexingMu.RUnlock()
+	if exists {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "У тебя уже идёт индексация. Дождись завершения или отмени её.",
+		})
+		return
+	}
+
+	// Получаем стикер-пак
+	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
+	if err != nil {
+		log.Printf("Error getting sticker set: %v", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("Не удалось найти стикер-пак '%s'. Проверь правильность имени.", setName),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "📦 Попробовать снова", CallbackData: "menu:addpack"}},
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+		return
+	}
+
+	total := len(stickerSet.Stickers)
+
+	// Создаём контекст с отменой
+	indexCtx, cancel := context.WithCancel(ctx)
+
+	// Сохраняем функцию отмены
+	b.activeIndexingMu.Lock()
+	b.activeIndexing[userID] = cancel
+	b.activeIndexingMu.Unlock()
+
+	// Cleanup при завершении
+	defer func() {
+		b.activeIndexingMu.Lock()
+		delete(b.activeIndexing, userID)
+		b.activeIndexingMu.Unlock()
+	}()
+
+	// Отправляем начальное сообщение с прогрессом и кнопкой отмены
+	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Индексирую пак \"%s\"\n%s 0%%", stickerSet.Title, progressBar(0, total)),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("Error sending progress message: %v", err)
+		return
+	}
+
+	// Многопоточная обработка
+	var processed atomic.Int64
+	var withText atomic.Int64
+	var completed atomic.Int64
+	var cancelled atomic.Bool
+
+	const workers = 5
+	jobs := make(chan models.Sticker, workers)
+	var wg sync.WaitGroup
+
+	// Запускаем воркеры с задержкой
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
+
+			for sticker := range jobs {
+				select {
+				case <-indexCtx.Done():
+					cancelled.Store(true)
+					return
+				default:
+				}
+
+				file, err := tgBot.GetFile(indexCtx, &bot.GetFileParams{FileID: sticker.FileID})
+				if err != nil {
+					completed.Add(1)
+					continue
+				}
+
+				fileURL := tgBot.FileDownloadLink(file)
+				text, _ := b.downloadAndOCR(indexCtx, fileURL, ocrEngine)
+
+				s := &storage.Sticker{
+					UserID:    userID,
+					StickerID: sticker.FileUniqueID,
+					SetName:   setName,
+					FileID:    sticker.FileID,
+					Text:      text,
+					Emoji:     sticker.Emoji,
+				}
+
+				if err := b.storage.SaveSticker(s); err == nil {
+					processed.Add(1)
+					if text != "" {
+						withText.Add(1)
+					}
+				}
+				completed.Add(1)
+			}
+		}(w)
+	}
+
+	// Отправляем задачи в горутине
+	go func() {
+		for _, sticker := range stickerSet.Stickers {
+			select {
+			case <-indexCtx.Done():
+				close(jobs)
+				return
+			case jobs <- sticker:
+			}
+		}
+		close(jobs)
+	}()
+
+	// Обновляем прогресс пока воркеры работают
+	go func() {
+		lastUpdate := int64(0)
+		for {
+			select {
+			case <-indexCtx.Done():
+				return
+			default:
+			}
+
+			current := completed.Load()
+			if current >= int64(total) {
+				break
+			}
+			if current-lastUpdate >= 3 {
+				percent := current * 100 / int64(total)
+				tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+					ChatID:    chatID,
+					MessageID: progressMsg.ID,
+					Text:      fmt.Sprintf("Индексирую пак \"%s\"\n%s %d%%\n\nОбработано: %d/%d", stickerSet.Title, progressBar(int(current), total), percent, current, total),
+					ReplyMarkup: &models.InlineKeyboardMarkup{
+						InlineKeyboard: [][]models.InlineKeyboardButton{
+							{{Text: "❌ Отменить", CallbackData: fmt.Sprintf("cancel:%d", userID)}},
+						},
+					},
+				})
+				lastUpdate = current
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	// Ждём завершения всех воркеров
+	wg.Wait()
+
+	// Финальное сообщение
+	if cancelled.Load() {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("⛔ Индексация пака \"%s\" отменена\n\nУспело сохраниться: %d стикеров", stickerSet.Title, processed.Load()),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+	} else {
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, processed.Load(), withText.Load()),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					{{Text: "📦 Добавить ещё", CallbackData: "menu:addpack"}},
+					{{Text: "◀️ В меню", CallbackData: "menu:main"}},
+				},
+			},
+		})
+	}
 }
