@@ -2,20 +2,26 @@ package storage
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
 	"strings"
 
+	_ "github.com/jaennil/sticker-search-bot/internal/storage/migrations"
+	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )
 
+//go:embed migrations/*.sql
+var embedMigrations embed.FS
+
 type Sticker struct {
-	ID          int64
-	UserID      int64
-	StickerID   string
-	SetName     string
-	FileID      string
-	Text        string
-	Emoji       string
+	ID        int64
+	UserID    int64
+	StickerID string
+	SetName   string
+	FileID    string
+	Text      string
+	Emoji     string
 }
 
 type Storage struct {
@@ -32,91 +38,44 @@ func New(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	s := &Storage{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("failed to migrate: %w", err)
+	// Run goose migrations
+	goose.SetBaseFS(embedMigrations)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		return nil, fmt.Errorf("failed to set dialect: %w", err)
 	}
+	if err := goose.Up(db, "migrations"); err != nil {
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	s := &Storage{db: db}
+
+	// Update text_lower for existing records (Go handles Cyrillic correctly)
+	s.updateTextLower()
 
 	return s, nil
 }
 
-func (s *Storage) migrate() error {
-	// Создаём таблицы
-	query := `
-	CREATE TABLE IF NOT EXISTS stickers (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER NOT NULL,
-		sticker_id TEXT NOT NULL,
-		set_name TEXT,
-		file_id TEXT NOT NULL,
-		text TEXT,
-		emoji TEXT,
-		UNIQUE(user_id, sticker_id)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_stickers_user_id ON stickers(user_id);
-
-	CREATE TABLE IF NOT EXISTS user_settings (
-		user_id INTEGER PRIMARY KEY,
-		ocr_engine TEXT DEFAULT 'paddle'
-	);
-	`
-	if _, err := s.db.Exec(query); err != nil {
-		return err
-	}
-
-	// Проверяем есть ли колонка text_lower
-	var hasTextLower bool
-	rows, err := s.db.Query("PRAGMA table_info(stickers)")
+func (s *Storage) updateTextLower() {
+	rows, err := s.db.Query("SELECT id, text FROM stickers WHERE text_lower IS NULL AND text IS NOT NULL AND text != ''")
 	if err != nil {
-		return err
+		return
 	}
+	defer rows.Close()
+
 	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt interface{}
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == "text_lower" {
-			hasTextLower = true
-			break
+		var id int64
+		var text string
+		if rows.Scan(&id, &text) == nil {
+			s.db.Exec("UPDATE stickers SET text_lower = ? WHERE id = ?", strings.ToLower(text), id)
 		}
 	}
-	rows.Close()
-
-	// Добавляем колонку text_lower если её нет
-	if !hasTextLower {
-		if _, err := s.db.Exec("ALTER TABLE stickers ADD COLUMN text_lower TEXT"); err != nil {
-			return err
-		}
-		// Создаём индекс
-		s.db.Exec("CREATE INDEX IF NOT EXISTS idx_stickers_text_lower ON stickers(text_lower)")
-	}
-
-	// Обновляем text_lower для существующих записей (в Go для поддержки кириллицы)
-	updateRows, err := s.db.Query("SELECT id, text FROM stickers WHERE text_lower IS NULL AND text IS NOT NULL AND text != ''")
-	if err == nil {
-		defer updateRows.Close()
-		for updateRows.Next() {
-			var id int64
-			var text string
-			if updateRows.Scan(&id, &text) == nil {
-				s.db.Exec("UPDATE stickers SET text_lower = ? WHERE id = ?", strings.ToLower(text), id)
-			}
-		}
-	}
-
-	return nil
 }
 
 func (s *Storage) GetUserOCREngine(userID int64) string {
 	var engine string
 	err := s.db.QueryRow("SELECT ocr_engine FROM user_settings WHERE user_id = ?", userID).Scan(&engine)
 	if err != nil {
-		return "paddle" // default
+		return "paddle"
 	}
 	return engine
 }
