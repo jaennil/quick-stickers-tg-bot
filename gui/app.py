@@ -149,13 +149,6 @@ class SearchableComboBox(QComboBox):
 
         self.blockSignals(False)
 
-        # Show dropdown with filtered results
-        if filter_text and self.count() > 0:
-            self.showPopup()
-            # Keep focus on line edit for continued typing
-            self.lineEdit().setFocus()
-            self.lineEdit().setCursorPosition(cursor_pos)
-
         self._is_filtering = False
 
     def _on_activated(self, index: int):
