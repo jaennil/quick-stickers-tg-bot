@@ -544,6 +544,19 @@ class StickerSearchApp(QWidget):
         except Exception as e:
             self.signal_bridge.send_result.emit(False, str(e))
 
+    def _get_thumbnail_from_db(self, file_id: str) -> Optional[bytes]:
+        """Get thumbnail from database if exists"""
+        if not self.db_conn:
+            return None
+        try:
+            cur = self.db_conn.cursor()
+            cur.execute("SELECT thumbnail FROM sticker_thumbnails WHERE file_id = %s", (file_id,))
+            row = cur.fetchone()
+            cur.close()
+            return row[0] if row else None
+        except Exception:
+            return None
+
     async def _download_sticker_thumb(self, file_id: str):
         """Download sticker thumbnail and emit signal when ready"""
         try:
@@ -555,7 +568,18 @@ class StickerSearchApp(QWidget):
                     self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
                     return
 
-            # Download sticker file
+            # Check database for thumbnail
+            db_thumb = self._get_thumbnail_from_db(file_id)
+            if db_thumb:
+                qimg = QImage.fromData(db_thumb)
+                pixmap = QPixmap.fromImage(qimg)
+                if not pixmap.isNull():
+                    # Save to disk cache for faster access next time
+                    pixmap.save(str(cache_file), "PNG")
+                    self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
+                    return
+
+            # Download sticker file from Telegram
             sticker_data = await self.pyrogram.download_media(file_id, in_memory=True)
             if not sticker_data:
                 return

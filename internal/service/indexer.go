@@ -32,6 +32,11 @@ type IndexProgress struct {
 	RemainingStickers  []models.Sticker
 }
 
+type thumbJob struct {
+	FileID  string
+	FileURL string
+}
+
 type ProgressCallback func(progress IndexProgress)
 
 type Indexer struct {
@@ -76,9 +81,38 @@ func (i *Indexer) IndexPack(
 	defer cancelIndex()
 
 	jobs := make(chan models.Sticker, constants.Workers)
+	thumbJobs := make(chan thumbJob, constants.Workers)
 	var wg sync.WaitGroup
+	var thumbWg sync.WaitGroup
 
-	// Start workers with staggered delay
+	// Start thumbnail workers
+	for tw := 0; tw < constants.Workers; tw++ {
+		thumbWg.Add(1)
+		go func(workerID int) {
+			defer thumbWg.Done()
+			for job := range thumbJobs {
+				select {
+				case <-indexCtx.Done():
+					return
+				default:
+				}
+				if err := i.downloadAndSaveThumbnail(indexCtx, job.FileID, job.FileURL); err != nil {
+					logger.Log.Debugw("[THUMB] failed to save thumbnail",
+						"worker", workerID,
+						"file_id", job.FileID[:20]+"...",
+						"error", err,
+					)
+				} else {
+					logger.Log.Debugw("[THUMB] thumbnail saved",
+						"worker", workerID,
+						"file_id", job.FileID[:20]+"...",
+					)
+				}
+			}
+		}(tw)
+	}
+
+	// Start OCR workers with staggered delay
 	for w := 0; w < constants.Workers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -146,6 +180,12 @@ func (i *Indexer) IndexPack(
 					)
 				} else {
 					processed.Add(1)
+					// Queue thumbnail download (non-blocking)
+					select {
+					case thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL}:
+					default:
+						// Channel full, skip thumbnail
+					}
 					if text != "" {
 						withText.Add(1)
 						logger.Log.Infow("[INDEX] sticker processed",
@@ -216,6 +256,8 @@ func (i *Indexer) IndexPack(
 	}()
 
 	wg.Wait()
+	close(thumbJobs)
+	thumbWg.Wait()
 
 	// Get last sticker URL if set
 	var lastURL string
@@ -319,6 +361,48 @@ func (i *Indexer) CompareOCREngines(ctx context.Context, fileURL string) []ocr.C
 	}
 
 	return i.ocr.CompareEngines(ctx, imagePath)
+}
+
+func (i *Indexer) downloadAndSaveThumbnail(ctx context.Context, fileID, fileURL string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	tmpFile, err := os.CreateTemp("", "thumb-*.webp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		return err
+	}
+	tmpFile.Close()
+
+	// Resize to 80x80 PNG
+	pngPath := strings.TrimSuffix(tmpFile.Name(), filepath.Ext(tmpFile.Name())) + ".png"
+	defer os.Remove(pngPath)
+
+	cmd := exec.CommandContext(ctx, "convert", tmpFile.Name(), "-resize", "80x80", pngPath)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	// Read PNG file
+	pngData, err := os.ReadFile(pngPath)
+	if err != nil {
+		return err
+	}
+
+	return i.repo.SaveThumbnail(fileID, pngData)
 }
 
 func ProgressBar(current, total int) string {

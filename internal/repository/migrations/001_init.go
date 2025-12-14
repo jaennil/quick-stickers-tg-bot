@@ -12,6 +12,7 @@ var dialect string
 func Register(d string) {
 	dialect = d
 	goose.AddMigrationContext(upInit, downInit)
+	goose.AddMigrationContext(upThumbnails, downThumbnails)
 }
 
 func upInit(ctx context.Context, tx *sql.Tx) error {

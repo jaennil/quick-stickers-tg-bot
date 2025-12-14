@@ -18,6 +18,10 @@ type Repository interface {
 	GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error)
 	UpdateStickerText(userID int64, stickerID string, text string) error
 
+	// Thumbnails
+	SaveThumbnail(fileID string, thumbnail []byte) error
+	GetThumbnail(fileID string) ([]byte, error)
+
 	// User settings
 	GetUserOCREngine(userID int64) string
 	SetUserOCREngine(userID int64, engine string) error

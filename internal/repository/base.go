@@ -127,6 +127,21 @@ func (r *BaseRepository) UpdateStickerText(userID int64, stickerID string, text 
 	return err
 }
 
+func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
+	query := r.db.Rebind(`
+		INSERT INTO sticker_thumbnails (file_id, thumbnail) VALUES (?, ?)
+		ON CONFLICT(file_id) DO UPDATE SET thumbnail = EXCLUDED.thumbnail
+	`)
+	_, err := r.db.Exec(query, fileID, thumbnail)
+	return err
+}
+
+func (r *BaseRepository) GetThumbnail(fileID string) ([]byte, error) {
+	var thumbnail []byte
+	err := r.db.Get(&thumbnail, r.db.Rebind("SELECT thumbnail FROM sticker_thumbnails WHERE file_id = ?"), fileID)
+	return thumbnail, err
+}
+
 func (r *BaseRepository) Close() error {
 	return r.db.Close()
 }
