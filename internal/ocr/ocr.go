@@ -40,19 +40,6 @@ func New(apiKeys []string, serverURL string) *OCR {
 	}
 }
 
-// getNextAPIKey возвращает следующий API ключ (ротация)
-func (o *OCR) getNextAPIKey() string {
-	if len(o.apiKeys) == 0 {
-		return ""
-	}
-
-	o.apiKeyMu.Lock()
-	defer o.apiKeyMu.Unlock()
-
-	key := o.apiKeys[o.apiKeyIndex]
-	o.apiKeyIndex = (o.apiKeyIndex + 1) % len(o.apiKeys)
-	return key
-}
 
 type ocrSpaceResponse struct {
 	ParsedResults []struct {
@@ -148,14 +135,53 @@ func (o *OCR) recognizeViaLocalServer(ctx context.Context, imagePath string, eng
 }
 
 func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, error) {
-	apiKey := o.getNextAPIKey()
-	if apiKey == "" {
+	if len(o.apiKeys) == 0 {
 		return "", fmt.Errorf("no OCR.space API keys configured")
 	}
 
+	// Try all keys until one works
+	startKeyIndex := o.getNextKeyIndex()
+	triedKeys := 0
+
+	for triedKeys < len(o.apiKeys) {
+		keyIndex := (startKeyIndex + triedKeys) % len(o.apiKeys)
+		apiKey := o.apiKeys[keyIndex]
+
+		text, err := o.tryAPIKey(ctx, imagePath, apiKey)
+		if err == nil {
+			return text, nil
+		}
+
+		// If quota exceeded, try next key
+		if errors.Is(err, ErrQuotaExceeded) {
+			triedKeys++
+			continue
+		}
+
+		// For other errors, return immediately
+		return "", err
+	}
+
+	// All keys exhausted
+	logger.Log.Errorw("[OCR] all API keys quota exceeded", "total_keys", len(o.apiKeys))
+	return "", ErrQuotaExceeded
+}
+
+// getNextKeyIndex returns the next key index for rotation
+func (o *OCR) getNextKeyIndex() int {
+	o.apiKeyMu.Lock()
+	defer o.apiKeyMu.Unlock()
+
+	idx := o.apiKeyIndex
+	o.apiKeyIndex = (o.apiKeyIndex + 1) % len(o.apiKeys)
+	return idx
+}
+
+// tryAPIKey attempts OCR with a single API key
+func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (string, error) {
 	// Маскируем ключ для логов
 	maskedKey := apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	logger.Log.Debugw("[OCR] using ocr.space API", "key", maskedKey)
+	logger.Log.Debugw("[OCR] trying ocr.space API", "key", maskedKey)
 
 	// Читаем файл
 	file, err := os.Open(imagePath)
