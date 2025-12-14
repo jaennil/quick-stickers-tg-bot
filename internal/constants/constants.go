@@ -3,7 +3,7 @@ package constants
 const (
 	PerPage           = 5
 	SearchResultLimit = 10
-	Workers           = 12
+	Workers           = 100
 	ProgressBarLength = 10
 	MinSearchLength   = 2
 	ProgressUpdateInterval = 3
