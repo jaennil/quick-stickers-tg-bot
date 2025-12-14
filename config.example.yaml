@@ -7,5 +7,6 @@ database:
 
 ocr:
   engine: "paddle"
+  # proxy_url: "socks5://127.0.0.1:2080"  # optional: SOCKS5 or HTTP proxy for ocr.space
   space_api_keys:
     - "YOUR_OCR_SPACE_API_KEY"
