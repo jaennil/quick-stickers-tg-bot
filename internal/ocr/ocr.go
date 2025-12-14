@@ -21,11 +21,13 @@ type OCR struct {
 	apiKeyIndex int
 	apiKeyMu    sync.Mutex
 	client      *http.Client
+	serverURL   string
 }
 
-func New(apiKeys []string) *OCR {
+func New(apiKeys []string, serverURL string) *OCR {
 	return &OCR{
-		apiKeys: apiKeys,
+		apiKeys:   apiKeys,
+		serverURL: serverURL,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -102,7 +104,7 @@ type localOCRResponse struct {
 func (o *OCR) recognizeViaLocalServer(ctx context.Context, imagePath string, engine string) (string, error) {
 	reqBody, _ := json.Marshal(map[string]string{"path": imagePath, "engine": engine})
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:8765/ocr", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", o.serverURL+"/ocr", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}

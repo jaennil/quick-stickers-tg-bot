@@ -439,6 +439,12 @@ func (b *Bot) handleListCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 // Default handler
 
 func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	// Handle inline queries
+	if update.InlineQuery != nil {
+		b.handleInlineQuery(ctx, tgBot, update)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -940,6 +946,42 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 			},
 		})
 	}
+}
+
+// Inline query handler
+
+func (b *Bot) handleInlineQuery(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	query := strings.TrimSpace(update.InlineQuery.Query)
+	userID := update.InlineQuery.From.ID
+
+	var results []models.InlineQueryResult
+
+	if len(query) >= constants.MinSearchLength {
+		stickers, err := b.repo.SearchByText(userID, query)
+		if err != nil {
+			log.Printf("Inline search error: %v", err)
+		} else {
+			// Limit to 50 results (Telegram max)
+			limit := 50
+			if len(stickers) < limit {
+				limit = len(stickers)
+			}
+
+			for i := 0; i < limit; i++ {
+				results = append(results, &models.InlineQueryResultCachedSticker{
+					ID:            fmt.Sprintf("%d_%s", i, stickers[i].StickerID),
+					StickerFileID: stickers[i].FileID,
+				})
+			}
+		}
+	}
+
+	tgBot.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{
+		InlineQueryID: update.InlineQuery.ID,
+		Results:       results,
+		CacheTime:     300, // 5 minutes cache
+		IsPersonal:    true,
+	})
 }
 
 // Text constants

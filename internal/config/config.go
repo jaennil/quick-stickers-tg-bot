@@ -24,6 +24,7 @@ type DatabaseConfig struct {
 type OCRConfig struct {
 	Engine       string   `yaml:"engine"`
 	SpaceAPIKeys []string `yaml:"space_api_keys"`
+	ServerURL    string   `yaml:"server_url"`
 }
 
 func Load(path string) (*Config, error) {
@@ -46,6 +47,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.OCR.Engine == "" {
 		cfg.OCR.Engine = "paddle"
+	}
+	if cfg.OCR.ServerURL == "" {
+		cfg.OCR.ServerURL = "http://127.0.0.1:8765"
 	}
 
 	return &cfg, nil
