@@ -120,8 +120,8 @@ func EmptyListButtons() [][]models.InlineKeyboardButton {
 // setName is used to continue indexing with selected engine
 func FallbackButtons(setName string) [][]models.InlineKeyboardButton {
 	return [][]models.InlineKeyboardButton{
-		{{Text: "🔹 EasyOCR", CallbackData: "fallback:easy:" + setName}},
-		{{Text: "🔸 PaddleOCR", CallbackData: "fallback:paddle:" + setName}},
+		{{Text: "🔶 EasyOCR (нейросеть)", CallbackData: "fallback:easy:" + setName}},
+		{{Text: "🔷 PaddleOCR (нейросеть)", CallbackData: "fallback:paddle:" + setName}},
 		{{Text: "❌ Отменить", CallbackData: "menu:main"}},
 	}
 }

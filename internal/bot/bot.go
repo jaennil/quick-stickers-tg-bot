@@ -298,7 +298,7 @@ func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *mod
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
 		MessageID: update.CallbackQuery.Message.Message.ID,
-		Text:      fmt.Sprintf("Текущий OCR движок: %s\n\nВыбери движок для распознавания текста:", engine),
+		Text:      b.buildSettingsText(engine),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: ui.OCREngineKeyboard(engine),
 		},
@@ -695,11 +695,26 @@ func (b *Bot) sendMainMenu(ctx context.Context, tgBot *bot.Bot, chatID int64) {
 	})
 }
 
+func (b *Bot) buildSettingsText(currentEngine string) string {
+	text := "⚙️ Настройки\n\n"
+	text += fmt.Sprintf("Текущий движок: %s\n", constants.GetEngineLabel(currentEngine))
+	text += constants.GetEngineDesc(currentEngine) + "\n\n"
+	text += "📋 Доступные движки:\n\n"
+	for _, e := range constants.OCREngines {
+		marker := "○"
+		if e.Name == currentEngine {
+			marker = "●"
+		}
+		text += fmt.Sprintf("%s %s\n%s\n\n", marker, e.Label, e.Desc)
+	}
+	return text
+}
+
 func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64) {
 	currentEngine := b.repo.GetUserOCREngine(userID)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   fmt.Sprintf("⚙️ Настройки\n\nТекущий OCR движок: %s\n\nВыбери движок для распознавания:", currentEngine),
+		ChatID:    chatID,
+		Text:      b.buildSettingsText(currentEngine),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: ui.OCREngineKeyboard(currentEngine),
 		},
@@ -711,7 +726,7 @@ func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, us
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: messageID,
-		Text:      fmt.Sprintf("⚙️ Настройки\n\nТекущий OCR движок: %s\n\nВыбери движок для распознавания:", currentEngine),
+		Text:      b.buildSettingsText(currentEngine),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: ui.OCREngineKeyboardWithBack(currentEngine),
 		},
