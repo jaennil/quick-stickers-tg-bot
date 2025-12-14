@@ -1,0 +1,6 @@
+PyQt6>=6.5.0
+psycopg2-binary>=2.9.0
+pyrogram>=2.0.0
+tgcrypto>=1.2.0
+pynput>=1.7.0
+pyyaml>=6.0

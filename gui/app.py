@@ -1,0 +1,530 @@
+#!/usr/bin/env python3
+"""
+Sticker Search GUI - Desktop app for quick sticker search and send
+Uses Telegram User API (Pyrogram) to send stickers directly
+"""
+import sys
+import os
+import signal
+import asyncio
+import threading
+import json
+import subprocess
+import re
+from pathlib import Path
+from typing import List, Optional
+from dataclasses import dataclass
+
+import yaml
+import psycopg2
+from pynput import keyboard
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QListWidget, QListWidgetItem, QLabel,
+    QComboBox, QPushButton
+)
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor
+from pyrogram import Client
+
+
+@dataclass
+class Sticker:
+    sticker_id: str
+    file_id: str
+    text: str
+    set_name: str
+    emoji: str
+
+
+@dataclass
+class ChatInfo:
+    id: int
+    name: str
+    type: str
+
+
+class SignalBridge(QObject):
+    show_window = pyqtSignal()
+    chats_loaded = pyqtSignal(list)
+    send_result = pyqtSignal(bool, str)
+
+
+class StickerSearchApp(QWidget):
+    def __init__(self, config: dict):
+        super().__init__()
+        self.config = config
+        self.db_conn = None
+        self.pyrogram: Optional[Client] = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.chats: List[ChatInfo] = []
+        self.selected_chat: Optional[ChatInfo] = None
+        self.state_file = Path(__file__).parent / ".state.json"
+
+        self.signal_bridge = SignalBridge()
+        self.signal_bridge.show_window.connect(self._show_window)
+        self.signal_bridge.chats_loaded.connect(self._on_chats_loaded)
+        self.signal_bridge.send_result.connect(self._on_send_result)
+
+        self.init_ui()
+        self.init_db()
+        self.load_state()
+        self.init_pyrogram()
+        self.start_hotkey_listener()
+
+    def init_ui(self):
+        self.setWindowTitle("Sticker Search")
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setFixedSize(500, 450)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # Chat selector
+        chat_layout = QHBoxLayout()
+        chat_label = QLabel("Chat:")
+        chat_label.setFixedWidth(40)
+        self.chat_combo = QComboBox()
+        self.chat_combo.setMinimumWidth(350)
+        self.chat_combo.currentIndexChanged.connect(self.on_chat_changed)
+        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setFixedWidth(30)
+        self.refresh_btn.clicked.connect(self.refresh_chats)
+        chat_layout.addWidget(chat_label)
+        chat_layout.addWidget(self.chat_combo, 1)
+        chat_layout.addWidget(self.refresh_btn)
+        layout.addLayout(chat_layout)
+
+        # Search input
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search stickers... (Enter to send)")
+        self.search_input.textChanged.connect(self.on_search_changed)
+        self.search_input.returnPressed.connect(self.on_enter_pressed)
+        layout.addWidget(self.search_input)
+
+        # Results list
+        self.results_list = QListWidget()
+        self.results_list.setIconSize(QSize(64, 64))
+        self.results_list.itemDoubleClicked.connect(self.on_sticker_selected)
+        layout.addWidget(self.results_list)
+
+        # Status bar
+        self.status_label = QLabel("Initializing...")
+        self.status_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+        # Dark theme
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                font-size: 14px;
+            }
+            QLineEdit {
+                padding: 12px;
+                font-size: 16px;
+                border: 2px solid #3c3c3c;
+                border-radius: 8px;
+                background-color: #252526;
+            }
+            QLineEdit:focus {
+                border-color: #007acc;
+            }
+            QComboBox {
+                padding: 8px;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                background-color: #252526;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #252526;
+                border: 1px solid #3c3c3c;
+                selection-background-color: #094771;
+            }
+            QPushButton {
+                padding: 8px;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                background-color: #252526;
+            }
+            QPushButton:hover {
+                background-color: #3c3c3c;
+            }
+            QListWidget {
+                border: 1px solid #3c3c3c;
+                border-radius: 8px;
+                background-color: #252526;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #3c3c3c;
+            }
+            QListWidget::item:selected {
+                background-color: #094771;
+            }
+            QListWidget::item:hover {
+                background-color: #2a2d2e;
+            }
+        """)
+
+        # Shortcuts
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self).activated.connect(self.hide)
+        QShortcut(QKeySequence(Qt.Key.Key_Down), self).activated.connect(self.select_next)
+        QShortcut(QKeySequence(Qt.Key.Key_Up), self).activated.connect(self.select_prev)
+
+    def select_next(self):
+        current = self.results_list.currentRow()
+        if current < self.results_list.count() - 1:
+            self.results_list.setCurrentRow(current + 1)
+
+    def select_prev(self):
+        current = self.results_list.currentRow()
+        if current > 0:
+            self.results_list.setCurrentRow(current - 1)
+
+    def init_db(self):
+        try:
+            db_config = self.config['database']
+            self.db_conn = psycopg2.connect(
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                dbname=db_config['dbname']
+            )
+            self.db_conn.autocommit = True
+        except Exception as e:
+            self.status_label.setText(f"DB error: {e}")
+
+    def load_state(self):
+        """Load saved state (selected chat)"""
+        if self.state_file.exists():
+            try:
+                with open(self.state_file) as f:
+                    state = json.load(f)
+                    self._saved_chat_id = state.get('chat_id')
+            except:
+                self._saved_chat_id = None
+        else:
+            self._saved_chat_id = None
+
+    def save_state(self):
+        """Save state (selected chat)"""
+        if self.selected_chat:
+            with open(self.state_file, 'w') as f:
+                json.dump({'chat_id': self.selected_chat.id}, f)
+
+    def init_pyrogram(self):
+        """Initialize Pyrogram in background thread"""
+        def run():
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+
+            self.pyrogram = Client(
+                "sticker_gui",
+                api_id=self.config['telegram']['api_id'],
+                api_hash=self.config['telegram']['api_hash'],
+                workdir=str(Path(__file__).parent)
+            )
+
+            async def start_and_load():
+                await self.pyrogram.start()
+                await self._load_chats()
+
+            self.loop.run_until_complete(start_and_load())
+            self.loop.run_forever()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+    async def _load_chats(self):
+        """Load recent dialogs"""
+        chats = []
+        async for dialog in self.pyrogram.get_dialogs(limit=50):
+            chat = dialog.chat
+            if chat.type.value in ('private', 'group', 'supergroup', 'channel'):
+                name = chat.title or chat.first_name or "Unknown"
+                if chat.last_name:
+                    name += f" {chat.last_name}"
+                chats.append(ChatInfo(
+                    id=chat.id,
+                    name=name,
+                    type=chat.type.value
+                ))
+        self.signal_bridge.chats_loaded.emit(chats)
+
+    def _on_chats_loaded(self, chats: List[ChatInfo]):
+        """Handle chats loaded signal"""
+        self.chats = chats
+        self.chat_combo.clear()
+        self.chat_combo.addItem("Select chat...", None)
+
+        saved_index = 0
+        for i, chat in enumerate(chats):
+            icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
+            self.chat_combo.addItem(f"{icon} {chat.name}", chat)
+            if self._saved_chat_id and chat.id == self._saved_chat_id:
+                saved_index = i + 1
+
+        if saved_index > 0:
+            self.chat_combo.setCurrentIndex(saved_index)
+
+        self.status_label.setText("Ready • Ctrl+Shift+S to toggle")
+
+    def refresh_chats(self):
+        """Refresh chat list"""
+        if self.pyrogram and self.loop:
+            self.status_label.setText("Loading chats...")
+            asyncio.run_coroutine_threadsafe(self._load_chats(), self.loop)
+
+    def on_chat_changed(self, index):
+        chat = self.chat_combo.itemData(index)
+        if chat:
+            self.selected_chat = chat
+            self.save_state()
+
+    def start_hotkey_listener(self):
+        hotkey_str = self.config.get('hotkey', '<ctrl>+<shift>+s')
+
+        def on_activate():
+            self.signal_bridge.show_window.emit()
+
+        hotkey = keyboard.HotKey(
+            keyboard.HotKey.parse(hotkey_str),
+            on_activate
+        )
+
+        def for_canonical(f):
+            return lambda k: f(self.listener.canonical(k))
+
+        self.listener = keyboard.Listener(
+            on_press=for_canonical(hotkey.press),
+            on_release=for_canonical(hotkey.release)
+        )
+        self.listener.start()
+
+    def _detect_telegram_chat(self) -> Optional[str]:
+        """Detect current chat from Telegram window title"""
+        try:
+            result = subprocess.run(
+                ['xdotool', 'search', '--class', 'TelegramDesktop', 'getwindowname'],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+
+            title = result.stdout.strip().split('\n')[0]
+            # Title format: "‎⁨chat_name⁩ – (number)" or just "chat_name – (number)"
+            # Remove unicode control characters and extract name before " – "
+            clean_title = re.sub(r'[\u200e\u2068\u2069]', '', title)
+            if ' – ' in clean_title:
+                chat_name = clean_title.split(' – ')[0].strip()
+                return chat_name
+            return None
+        except Exception:
+            return None
+
+    def _auto_select_chat(self, chat_name: str):
+        """Find and select chat by name"""
+        if not chat_name or not self.chats:
+            return
+
+        chat_name_lower = chat_name.lower()
+        for i, chat in enumerate(self.chats):
+            if chat.name.lower() == chat_name_lower:
+                self.chat_combo.setCurrentIndex(i + 1)  # +1 for "Select chat..." item
+                return
+
+    def _show_window(self):
+        if self.isVisible():
+            self.hide()
+            return
+
+        # Auto-detect current Telegram chat
+        detected_chat = self._detect_telegram_chat()
+        if detected_chat:
+            self._auto_select_chat(detected_chat)
+
+        # Open on the monitor where cursor is located
+        cursor_pos = QCursor.pos()
+        screen = QApplication.screenAt(cursor_pos)
+        if not screen:
+            screen = QApplication.primaryScreen()
+        screen_geo = screen.geometry()
+        x = screen_geo.x() + (screen_geo.width() - self.width()) // 2
+        y = screen_geo.y() + (screen_geo.height() - self.height()) // 3
+        self.move(x, y)
+
+        self.show()
+        self.activateWindow()
+        self.raise_()
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def on_search_changed(self, text: str):
+        if len(text) < 2:
+            self.results_list.clear()
+            return
+
+        stickers = self.search_stickers(text)
+        self.update_results(stickers)
+
+    def search_stickers(self, query: str) -> List[Sticker]:
+        if not self.db_conn:
+            return []
+
+        user_id = self.config.get('user_id', 0)
+        try:
+            cur = self.db_conn.cursor()
+            cur.execute("""
+                SELECT sticker_id, file_id, text, set_name, emoji
+                FROM stickers
+                WHERE user_id = %s AND text ILIKE %s
+                LIMIT 20
+            """, (user_id, f"%{query}%"))
+
+            result = [
+                Sticker(
+                    sticker_id=row[0],
+                    file_id=row[1],
+                    text=row[2] or "",
+                    set_name=row[3] or "",
+                    emoji=row[4] or ""
+                )
+                for row in cur.fetchall()
+            ]
+            cur.close()
+            return result
+        except Exception as e:
+            self.db_conn.rollback()
+            self.status_label.setText(f"Search error: {e}")
+            return []
+
+    def update_results(self, stickers: List[Sticker]):
+        self.results_list.clear()
+        for sticker in stickers:
+            item = QListWidgetItem()
+            text = sticker.text[:60] + "..." if len(sticker.text) > 60 else sticker.text
+            item.setText(f"{sticker.emoji}  {text}")
+            item.setData(Qt.ItemDataRole.UserRole, sticker)
+            self.results_list.addItem(item)
+
+        if stickers:
+            self.results_list.setCurrentRow(0)
+
+    def on_enter_pressed(self):
+        if self.results_list.count() > 0:
+            current = self.results_list.currentRow()
+            if current < 0:
+                current = 0
+            item = self.results_list.item(current)
+            if item:
+                self.on_sticker_selected(item)
+
+    def on_sticker_selected(self, item: QListWidgetItem):
+        sticker: Sticker = item.data(Qt.ItemDataRole.UserRole)
+        if not sticker:
+            return
+
+        if not self.selected_chat:
+            self.status_label.setText("⚠ Select a chat first!")
+            return
+
+        if not self.pyrogram or not self.loop:
+            self.status_label.setText("⚠ Telegram not connected")
+            return
+
+        self.status_label.setText("Sending...")
+        asyncio.run_coroutine_threadsafe(
+            self._send_sticker(sticker),
+            self.loop
+        )
+
+    async def _send_sticker(self, sticker: Sticker):
+        try:
+            await self.pyrogram.send_sticker(
+                self.selected_chat.id,
+                sticker.file_id
+            )
+            self.signal_bridge.send_result.emit(True, self.selected_chat.name)
+        except Exception as e:
+            self.signal_bridge.send_result.emit(False, str(e))
+
+    def _on_send_result(self, success: bool, message: str):
+        if success:
+            self.status_label.setText(f"✓ Sent to {message}")
+            self.hide()
+        else:
+            self.status_label.setText(f"✗ Error: {message}")
+
+    def closeEvent(self, event):
+        if self.db_conn:
+            self.db_conn.close()
+        if self.pyrogram and self.loop:
+            asyncio.run_coroutine_threadsafe(self.pyrogram.stop(), self.loop)
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        event.accept()
+
+
+def main():
+    config_path = Path(__file__).parent / "config.yaml"
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    # Validate config
+    if not config.get('telegram', {}).get('api_id'):
+        print("Error: telegram.api_id is required")
+        print("Get it from https://my.telegram.org")
+        sys.exit(1)
+
+    if not config.get('telegram', {}).get('api_hash'):
+        print("Error: telegram.api_hash is required")
+        print("Get it from https://my.telegram.org")
+        sys.exit(1)
+
+    if not config.get('user_id'):
+        print("Error: user_id is required")
+        sys.exit(1)
+
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    signal.signal(signal.SIGINT, lambda *args: app.quit())
+
+    window = StickerSearchApp(config)
+
+    print("Sticker Search GUI started")
+    print(f"Press {config.get('hotkey', 'Ctrl+Shift+S')} to show")
+    print("Ctrl+C to quit")
+
+    quit_shortcut = QShortcut(QKeySequence("Ctrl+Q"), window)
+    quit_shortcut.activated.connect(app.quit)
+
+    timer = QTimer()
+    timer.timeout.connect(lambda: None)
+    timer.start(100)
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

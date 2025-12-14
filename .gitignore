@@ -4,7 +4,8 @@
 .venv/
 config.yaml
 scripts/
-*.py
+/*.py
+!gui/*.py
 
 # Database
 *.db
