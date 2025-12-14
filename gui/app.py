@@ -11,8 +11,9 @@ import threading
 import json
 import subprocess
 import re
+import hashlib
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from dataclasses import dataclass
 
 import yaml
@@ -24,8 +25,10 @@ from PyQt6.QtWidgets import (
     QComboBox, QPushButton
 )
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut, QCursor
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage
 from pyrogram import Client
+from PIL import Image
+import io
 
 
 @dataclass
@@ -48,6 +51,7 @@ class SignalBridge(QObject):
     show_window = pyqtSignal()
     chats_loaded = pyqtSignal(list)
     send_result = pyqtSignal(bool, str)
+    sticker_thumb_loaded = pyqtSignal(str, QPixmap)  # file_id, pixmap
 
 
 class StickerSearchApp(QWidget):
@@ -60,11 +64,16 @@ class StickerSearchApp(QWidget):
         self.chats: List[ChatInfo] = []
         self.selected_chat: Optional[ChatInfo] = None
         self.state_file = Path(__file__).parent / ".state.json"
+        self.thumb_cache_dir = Path(__file__).parent / ".thumb_cache"
+        self.thumb_cache_dir.mkdir(exist_ok=True)
+        self.thumb_cache: Dict[str, QPixmap] = {}  # file_id -> pixmap
+        self.pending_thumbs: set = set()  # file_ids currently being downloaded
 
         self.signal_bridge = SignalBridge()
         self.signal_bridge.show_window.connect(self._show_window)
         self.signal_bridge.chats_loaded.connect(self._on_chats_loaded)
         self.signal_bridge.send_result.connect(self._on_send_result)
+        self.signal_bridge.sticker_thumb_loaded.connect(self._on_thumb_loaded)
 
         self.init_ui()
         self.init_db()
@@ -413,6 +422,17 @@ class StickerSearchApp(QWidget):
             text = sticker.text[:60] + "..." if len(sticker.text) > 60 else sticker.text
             item.setText(f"{sticker.emoji}  {text}")
             item.setData(Qt.ItemDataRole.UserRole, sticker)
+
+            # Set cached thumbnail or schedule download
+            if sticker.file_id in self.thumb_cache:
+                item.setIcon(QIcon(self.thumb_cache[sticker.file_id]))
+            elif sticker.file_id not in self.pending_thumbs and self.pyrogram and self.loop:
+                self.pending_thumbs.add(sticker.file_id)
+                asyncio.run_coroutine_threadsafe(
+                    self._download_sticker_thumb(sticker.file_id),
+                    self.loop
+                )
+
             self.results_list.addItem(item)
 
         if stickers:
@@ -455,6 +475,55 @@ class StickerSearchApp(QWidget):
             self.signal_bridge.send_result.emit(True, self.selected_chat.name)
         except Exception as e:
             self.signal_bridge.send_result.emit(False, str(e))
+
+    async def _download_sticker_thumb(self, file_id: str):
+        """Download sticker thumbnail and emit signal when ready"""
+        try:
+            # Check disk cache first
+            cache_file = self.thumb_cache_dir / f"{hashlib.md5(file_id.encode()).hexdigest()}.png"
+            if cache_file.exists():
+                pixmap = QPixmap(str(cache_file))
+                if not pixmap.isNull():
+                    self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
+                    return
+
+            # Download sticker file
+            sticker_data = await self.pyrogram.download_media(file_id, in_memory=True)
+            if not sticker_data:
+                return
+
+            # Convert webp to PNG using PIL
+            img = Image.open(io.BytesIO(sticker_data.getvalue()))
+            img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+
+            # Convert to QPixmap
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            buffer.seek(0)
+
+            qimg = QImage.fromData(buffer.getvalue())
+            pixmap = QPixmap.fromImage(qimg)
+
+            if not pixmap.isNull():
+                # Save to disk cache
+                pixmap.save(str(cache_file), "PNG")
+                self.signal_bridge.sticker_thumb_loaded.emit(file_id, pixmap)
+
+        except Exception as e:
+            pass  # Silently fail for thumbnails
+        finally:
+            self.pending_thumbs.discard(file_id)
+
+    def _on_thumb_loaded(self, file_id: str, pixmap: QPixmap):
+        """Handle sticker thumbnail loaded signal"""
+        self.thumb_cache[file_id] = pixmap
+
+        # Update list items with this file_id
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            sticker: Sticker = item.data(Qt.ItemDataRole.UserRole)
+            if sticker and sticker.file_id == file_id:
+                item.setIcon(QIcon(pixmap))
 
     def _on_send_result(self, success: bool, message: str):
         if success:

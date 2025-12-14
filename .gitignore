@@ -7,6 +7,11 @@ scripts/
 /*.py
 !gui/*.py
 
+# GUI cache
+gui/.thumb_cache/
+gui/.state.json
+gui/sticker_gui.session*
+
 # Database
 *.db
 
