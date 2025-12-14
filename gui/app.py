@@ -12,6 +12,7 @@ import json
 import subprocess
 import re
 import hashlib
+import math
 from pathlib import Path
 from typing import List, Optional, Dict
 from dataclasses import dataclass
@@ -24,8 +25,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QListWidget, QListWidgetItem, QLabel,
     QComboBox, QPushButton, QListView
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer, QPointF
+from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage, QPainter, QColor, QPen
 from pyrogram import Client
 from PIL import Image
 import io
@@ -68,6 +69,8 @@ class StickerSearchApp(QWidget):
         self.thumb_cache_dir.mkdir(exist_ok=True)
         self.thumb_cache: Dict[str, QPixmap] = {}  # file_id -> pixmap
         self.pending_thumbs: set = set()  # file_ids currently being downloaded
+        self.spinner_frames = self._create_spinner_frames()
+        self.spinner_frame_idx = 0
 
         self.signal_bridge = SignalBridge()
         self.signal_bridge.show_window.connect(self._show_window)
@@ -80,6 +83,7 @@ class StickerSearchApp(QWidget):
         self.load_state()
         self.init_pyrogram()
         self.start_hotkey_listener()
+        self._start_spinner_timer()
 
     def init_ui(self):
         self.setWindowTitle("Sticker Search")
@@ -211,6 +215,60 @@ class StickerSearchApp(QWidget):
         current = self.results_list.currentRow()
         if current > 0:
             self.results_list.setCurrentRow(current - 1)
+
+    def _create_spinner_frames(self, num_frames: int = 12) -> List[QPixmap]:
+        """Create spinning wheel animation frames"""
+        frames = []
+        size = 80
+        for i in range(num_frames):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            center = QPointF(size / 2, size / 2)
+            radius = size / 2 - 10
+
+            for j in range(num_frames):
+                angle = (360 / num_frames) * j - 90
+                alpha = int(255 * ((j - i) % num_frames) / num_frames)
+                color = QColor(150, 150, 150, alpha)
+                pen = QPen(color)
+                pen.setWidth(4)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+
+                rad = math.radians(angle)
+                x1 = center.x() + (radius - 10) * math.cos(rad)
+                y1 = center.y() + (radius - 10) * math.sin(rad)
+                x2 = center.x() + radius * math.cos(rad)
+                y2 = center.y() + radius * math.sin(rad)
+                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+            painter.end()
+            frames.append(pixmap)
+        return frames
+
+    def _start_spinner_timer(self):
+        """Start timer to animate loading spinners"""
+        self.spinner_timer = QTimer()
+        self.spinner_timer.timeout.connect(self._update_spinner)
+        self.spinner_timer.start(80)
+
+    def _update_spinner(self):
+        """Update spinner animation for loading items"""
+        if not self.pending_thumbs:
+            return
+
+        self.spinner_frame_idx = (self.spinner_frame_idx + 1) % len(self.spinner_frames)
+        spinner_icon = QIcon(self.spinner_frames[self.spinner_frame_idx])
+
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            sticker: Sticker = item.data(Qt.ItemDataRole.UserRole)
+            if sticker and sticker.file_id in self.pending_thumbs:
+                item.setIcon(spinner_icon)
 
     def init_db(self):
         try:
@@ -430,15 +488,18 @@ class StickerSearchApp(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, sticker)
             item.setSizeHint(QSize(88, 88))
 
-            # Set cached thumbnail or schedule download
+            # Set cached thumbnail or schedule download with spinner
             if sticker.file_id in self.thumb_cache:
                 item.setIcon(QIcon(self.thumb_cache[sticker.file_id]))
-            elif sticker.file_id not in self.pending_thumbs and self.pyrogram and self.loop:
-                self.pending_thumbs.add(sticker.file_id)
-                asyncio.run_coroutine_threadsafe(
-                    self._download_sticker_thumb(sticker.file_id),
-                    self.loop
-                )
+            else:
+                # Show spinner while loading
+                item.setIcon(QIcon(self.spinner_frames[self.spinner_frame_idx]))
+                if sticker.file_id not in self.pending_thumbs and self.pyrogram and self.loop:
+                    self.pending_thumbs.add(sticker.file_id)
+                    asyncio.run_coroutine_threadsafe(
+                        self._download_sticker_thumb(sticker.file_id),
+                        self.loop
+                    )
 
             self.results_list.addItem(item)
 
