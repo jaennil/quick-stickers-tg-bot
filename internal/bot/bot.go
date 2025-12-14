@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/constants"
+	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/service"
@@ -68,19 +68,19 @@ func (b *Bot) registerHandlers() {
 }
 
 func (b *Bot) Start(ctx context.Context) {
-	log.Println("Bot started")
+	logger.Log.Info("Bot started")
 	b.bot.Start(ctx)
 }
 
 // Command handlers
 
 func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	log.Printf("[CMD] /start from user=%d", update.Message.From.ID)
+	logger.Log.Infow("[CMD] /start", "user", update.Message.From.ID)
 	b.sendMainMenu(ctx, tgBot, update.Message.Chat.ID)
 }
 
 func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	log.Printf("[CMD] /help from user=%d", update.Message.From.ID)
+	logger.Log.Infow("[CMD] /help", "user", update.Message.From.ID)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   helpText,
@@ -89,13 +89,13 @@ func (b *Bot) handleHelp(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 
 func (b *Bot) handleStats(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
-	log.Printf("[CMD] /stats from user=%d", userID)
+	logger.Log.Infow("[CMD] /stats", "user", userID)
 	count, err := b.repo.GetUserStickerCount(userID)
 	if err != nil {
-		log.Printf("[CMD] /stats error: %v", err)
+		logger.Log.Errorw("[CMD] /stats error", "error", err)
 		count = 0
 	}
-	log.Printf("[CMD] /stats result: user=%d count=%d", userID, count)
+	logger.Log.Infow("[CMD] /stats result", "user", userID, "count", count)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("У тебя сохранено стикеров: %d", count),
@@ -104,9 +104,9 @@ func (b *Bot) handleStats(ctx context.Context, tgBot *bot.Bot, update *models.Up
 
 func (b *Bot) handleSettings(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
-	log.Printf("[CMD] /settings from user=%d", userID)
+	logger.Log.Infow("[CMD] /settings", "user", userID)
 	currentEngine := b.repo.GetUserOCREngine(userID)
-	log.Printf("[CMD] /settings result: user=%d engine=%s", userID, currentEngine)
+	logger.Log.Infow("[CMD] /settings result", "user", userID, "engine", currentEngine)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("Текущий OCR движок: %s\n\nВыбери движок для распознавания текста:", currentEngine),
@@ -120,7 +120,7 @@ func (b *Bot) handleSearch(ctx context.Context, tgBot *bot.Bot, update *models.U
 	userID := update.Message.From.ID
 	query := strings.TrimPrefix(update.Message.Text, "/search")
 	query = strings.TrimSpace(query)
-	log.Printf("[CMD] /search from user=%d query=%q", userID, query)
+	logger.Log.Infow("[CMD] /search", "user", userID, "query", query)
 
 	if query == "" {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -137,7 +137,7 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	userID := update.Message.From.ID
 	newText := strings.TrimPrefix(update.Message.Text, "/edit")
 	newText = strings.TrimSpace(newText)
-	log.Printf("[CMD] /edit from user=%d text=%q", userID, newText)
+	logger.Log.Infow("[CMD] /edit", "user", userID, "text", newText)
 
 	if newText == "" {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -149,7 +149,7 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 
 	stickerID := b.state.GetLastSticker(userID)
 	if stickerID == "" {
-		log.Printf("[CMD] /edit no last sticker for user=%d", userID)
+		logger.Log.Warnw("[CMD] /edit no last sticker", "user", userID)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Сначала отправь стикер, текст которого хочешь исправить.",
@@ -158,7 +158,7 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 	}
 
 	if err := b.repo.UpdateStickerText(userID, stickerID, newText); err != nil {
-		log.Printf("[CMD] /edit error: user=%d sticker=%s err=%v", userID, stickerID, err)
+		logger.Log.Errorw("[CMD] /edit error", "user", userID, "sticker", stickerID, "error", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Ошибка при обновлении текста",
@@ -166,7 +166,7 @@ func (b *Bot) handleEdit(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 		return
 	}
 
-	log.Printf("[CMD] /edit success: user=%d sticker=%s text=%q", userID, stickerID, newText)
+	logger.Log.Infow("[CMD] /edit success", "user", userID, "sticker", stickerID, "text", newText)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("Текст обновлен на: \"%s\"", newText),
@@ -177,7 +177,7 @@ func (b *Bot) handleAddPack(ctx context.Context, tgBot *bot.Bot, update *models.
 	userID := update.Message.From.ID
 	setName := strings.TrimPrefix(update.Message.Text, "/addpack")
 	setName = strings.TrimSpace(setName)
-	log.Printf("[CMD] /addpack from user=%d pack=%q", userID, setName)
+	logger.Log.Infow("[CMD] /addpack", "user", userID, "pack", setName)
 
 	if setName == "" {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -203,7 +203,7 @@ func (b *Bot) handleList(ctx context.Context, tgBot *bot.Bot, update *models.Upd
 			page = 1
 		}
 	}
-	log.Printf("[CMD] /list from user=%d page=%d", userID, page)
+	logger.Log.Infow("[CMD] /list", "user", userID, "page", page)
 
 	b.sendStickerListMsg(ctx, tgBot, chatID, userID, page)
 }
@@ -215,7 +215,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
 	messageID := update.CallbackQuery.Message.Message.ID
 	userID := update.CallbackQuery.From.ID
-	log.Printf("[CALLBACK] menu:%s from user=%d", action, userID)
+	logger.Log.Infow("[CALLBACK] menu", "action", action, "user", userID)
 
 	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
@@ -273,7 +273,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	engine := strings.TrimPrefix(update.CallbackQuery.Data, "ocr:")
 	userID := update.CallbackQuery.From.ID
-	log.Printf("[CALLBACK] ocr:%s from user=%d", engine, userID)
+	logger.Log.Infow("[CALLBACK] ocr", "engine", engine, "user", userID)
 
 	if !constants.IsValidEngine(engine) {
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
@@ -285,7 +285,7 @@ func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *mod
 	}
 
 	if err := b.repo.SetUserOCREngine(userID, engine); err != nil {
-		log.Printf("Error saving OCR engine: %v", err)
+		logger.Log.Errorw("Error saving OCR engine", "error", err)
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            "Ошибка сохранения",
@@ -312,7 +312,7 @@ func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *mod
 func (b *Bot) handleSelectOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	data := strings.TrimPrefix(update.CallbackQuery.Data, "selectocr:")
 	userID := update.CallbackQuery.From.ID
-	log.Printf("[CALLBACK] selectocr:%s from user=%d", data, userID)
+	logger.Log.Infow("[CALLBACK] selectocr", "data", data, "user", userID)
 	parts := strings.SplitN(data, ":", 2)
 	if len(parts) != 2 {
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
@@ -336,7 +336,7 @@ func (b *Bot) handleSelectOCRCallback(ctx context.Context, tgBot *bot.Bot, updat
 
 	text := results[engine]
 	if err := b.repo.UpdateStickerText(userID, stickerID, text); err != nil {
-		log.Printf("Error updating sticker text: %v", err)
+		logger.Log.Errorw("Error updating sticker text", "error", err)
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            "Ошибка сохранения",
@@ -363,7 +363,7 @@ func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	stickerID := strings.TrimPrefix(update.CallbackQuery.Data, "edit:")
 	userID := update.CallbackQuery.From.ID
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
-	log.Printf("[CALLBACK] edit:%s from user=%d", stickerID, userID)
+	logger.Log.Infow("[CALLBACK] edit", "sticker", stickerID, "user", userID)
 
 	b.state.SetLastSticker(userID, stickerID)
 	b.state.SetAwaitingMode(userID, state.ModeEdit)
@@ -383,7 +383,7 @@ func (b *Bot) handleCancelCallback(ctx context.Context, tgBot *bot.Bot, update *
 	fmt.Sscanf(strings.TrimPrefix(update.CallbackQuery.Data, "cancel:"), "%d", &targetUserID)
 
 	callerUserID := update.CallbackQuery.From.ID
-	log.Printf("[CALLBACK] cancel:%d from user=%d", targetUserID, callerUserID)
+	logger.Log.Infow("[CALLBACK] cancel", "target", targetUserID, "user", callerUserID)
 
 	if callerUserID != targetUserID {
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
@@ -414,7 +414,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 	setName := strings.TrimPrefix(update.CallbackQuery.Data, "addpack:")
 	userID := update.CallbackQuery.From.ID
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
-	log.Printf("[CALLBACK] addpack:%s from user=%d", setName, userID)
+	logger.Log.Infow("[CALLBACK] addpack", "pack", setName, "user", userID)
 
 	if b.state.HasActiveIndexing(userID) {
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
@@ -436,7 +436,7 @@ func (b *Bot) handleAddPackCallback(ctx context.Context, tgBot *bot.Bot, update 
 func (b *Bot) handleListCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	pageStr := strings.TrimPrefix(update.CallbackQuery.Data, "list:")
 	userID := update.CallbackQuery.From.ID
-	log.Printf("[CALLBACK] list:%s from user=%d", pageStr, userID)
+	logger.Log.Infow("[CALLBACK] list", "page", pageStr, "user", userID)
 
 	if pageStr == "noop" {
 		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
@@ -533,20 +533,20 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	sticker := update.Message.Sticker
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
-	log.Printf("[STICKER] received sticker=%s set=%s from user=%d", sticker.FileUniqueID, sticker.SetName, userID)
+	logger.Log.Infow("[STICKER] received", "sticker", sticker.FileUniqueID, "set", sticker.SetName, "user", userID)
 
 	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "Распознаю текст...",
 	})
 	if err != nil {
-		log.Printf("Error sending progress message: %v", err)
+		logger.Log.Errorw("Error sending progress message", "error", err)
 		return
 	}
 
 	file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 	if err != nil {
-		log.Printf("Error getting file: %v", err)
+		logger.Log.Errorw("Error getting file", "error", err)
 		return
 	}
 
@@ -563,7 +563,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 			defer wg.Done()
 			text, err := b.indexer.DownloadAndOCR(ctx, fileURL, engineName)
 			if err != nil {
-				log.Printf("OCR error (%s): %v", engineName, err)
+				logger.Log.Errorw("OCR error", "engine", engineName, "error", err)
 				text = ""
 			}
 			resultsMu.Lock()
@@ -574,10 +574,9 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	wg.Wait()
 
 	// Log results
-	log.Printf("OCR results for sticker %s:", sticker.FileUniqueID)
 	for name, text := range results {
 		if text != "" {
-			log.Printf("  %s: %q", name, text)
+			logger.Log.Infow("[OCR] result", "sticker", sticker.FileUniqueID, "engine", name, "text", text)
 		}
 	}
 
@@ -768,13 +767,13 @@ func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64,
 func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
 	newText := strings.TrimSpace(update.Message.Text)
-	log.Printf("[EDIT] awaiting edit text=%q from user=%d", newText, userID)
+	logger.Log.Infow("[EDIT] awaiting", "user", userID, "text", newText)
 
 	b.state.ClearAwaitingMode(userID)
 
 	stickerID := b.state.GetLastSticker(userID)
 	if stickerID == "" {
-		log.Printf("[EDIT] no last sticker for user=%d", userID)
+		logger.Log.Warnw("[EDIT] no last sticker", "user", userID)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Ошибка: стикер не найден",
@@ -783,7 +782,7 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 	}
 
 	if err := b.repo.UpdateStickerText(userID, stickerID, newText); err != nil {
-		log.Printf("[EDIT] error updating sticker text: user=%d sticker=%s err=%v", userID, stickerID, err)
+		logger.Log.Errorw("[EDIT] error updating", "user", userID, "sticker", stickerID, "error", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Ошибка при обновлении текста",
@@ -791,7 +790,7 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 		return
 	}
 
-	log.Printf("[EDIT] success: user=%d sticker=%s text=%q", userID, stickerID, newText)
+	logger.Log.Infow("[EDIT] success", "user", userID, "sticker", stickerID, "text", newText)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("✅ Текст обновлен: \"%s\"", newText),
@@ -801,20 +800,20 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	query := strings.TrimSpace(update.Message.Text)
 	userID := update.Message.From.ID
-	log.Printf("[TEXT] text search query=%q from user=%d", query, userID)
+	logger.Log.Infow("[TEXT] search", "user", userID, "query", query)
 
 	if len(query) < constants.MinSearchLength {
-		log.Printf("[TEXT] query too short, skipping")
+		logger.Log.Debugw("[TEXT] query too short", "query", query)
 		return
 	}
 
 	stickers, err := b.repo.SearchByText(userID, query)
 	if err != nil {
-		log.Printf("[TEXT] search error: user=%d query=%q err=%v", userID, query, err)
+		logger.Log.Errorw("[TEXT] search error", "user", userID, "query", query, "error", err)
 		return
 	}
 	if len(stickers) == 0 {
-		log.Printf("[TEXT] no results: user=%d query=%q", userID, query)
+		logger.Log.Infow("[TEXT] no results", "user", userID, "query", query)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
@@ -822,7 +821,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 		return
 	}
 
-	log.Printf("[TEXT] found %d stickers: user=%d query=%q", len(stickers), userID, query)
+	logger.Log.Infow("[TEXT] found", "user", userID, "query", query, "count", len(stickers))
 	limit := 5
 	if len(stickers) < limit {
 		limit = len(stickers)
@@ -837,7 +836,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 }
 
 func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, query string) {
-	log.Printf("[SEARCH] searching query=%q for user=%d", query, userID)
+	logger.Log.Infow("[SEARCH] searching", "user", userID, "query", query)
 	query = strings.TrimSpace(query)
 	if len(query) < constants.MinSearchLength {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -852,7 +851,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 
 	stickers, err := b.repo.SearchByText(userID, query)
 	if err != nil {
-		log.Printf("[SEARCH] error: user=%d query=%q err=%v", userID, query, err)
+		logger.Log.Errorw("[SEARCH] error", "user", userID, "query", query, "error", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "Ошибка при поиске",
@@ -864,7 +863,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 	}
 
 	if len(stickers) == 0 {
-		log.Printf("[SEARCH] no results: user=%d query=%q", userID, query)
+		logger.Log.Infow("[SEARCH] no results", "user", userID, "query", query)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
@@ -875,7 +874,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 		return
 	}
 
-	log.Printf("[SEARCH] found %d stickers: user=%d query=%q", len(stickers), userID, query)
+	logger.Log.Infow("[SEARCH] found", "user", userID, "query", query, "count", len(stickers))
 	limit := constants.SearchResultLimit
 	if len(stickers) < limit {
 		limit = len(stickers)
@@ -903,7 +902,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 }
 
 func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, setName string) {
-	log.Printf("[ADDPACK] starting pack=%q for user=%d", setName, userID)
+	logger.Log.Infow("[ADDPACK] starting", "user", userID, "pack", setName)
 	if setName == "" {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
@@ -925,7 +924,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 
 	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
 	if err != nil {
-		log.Printf("[ADDPACK] pack not found: pack=%q user=%d err=%v", setName, userID, err)
+		logger.Log.Warnw("[ADDPACK] pack not found", "pack", setName, "user", userID, "error", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   fmt.Sprintf("Не удалось найти стикер-пак '%s'. Проверь правильность имени.", setName),
@@ -938,7 +937,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 
 	total := len(stickerSet.Stickers)
 	ocrEngine := b.repo.GetUserOCREngine(userID)
-	log.Printf("[ADDPACK] found pack=%q title=%q stickers=%d engine=%s user=%d", setName, stickerSet.Title, total, ocrEngine, userID)
+	logger.Log.Infow("[ADDPACK] found pack", "pack", setName, "title", stickerSet.Title, "stickers", total, "engine", ocrEngine, "user", userID)
 
 	indexCtx, cancel := context.WithCancel(ctx)
 	b.state.SetActiveIndexing(userID, cancel)
@@ -952,7 +951,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 		},
 	})
 	if err != nil {
-		log.Printf("Error sending progress message: %v", err)
+		logger.Log.Errorw("Error sending progress message", "error", err)
 		return
 	}
 
@@ -969,7 +968,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 	})
 
 	if result.Cancelled {
-		log.Printf("[ADDPACK] cancelled: pack=%q user=%d processed=%d", setName, userID, result.Processed)
+		logger.Log.Infow("[ADDPACK] cancelled", "pack", setName, "user", userID, "processed", result.Processed)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: progressMsg.ID,
@@ -979,7 +978,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 			},
 		})
 	} else {
-		log.Printf("[ADDPACK] completed: pack=%q user=%d processed=%d with_text=%d", setName, userID, result.Processed, result.WithText)
+		logger.Log.Infow("[ADDPACK] completed", "pack", setName, "user", userID, "processed", result.Processed, "with_text", result.WithText)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: progressMsg.ID,
@@ -996,14 +995,14 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 func (b *Bot) handleInlineQuery(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	query := strings.TrimSpace(update.InlineQuery.Query)
 	userID := update.InlineQuery.From.ID
-	log.Printf("[INLINE] query=%q from user=%d", query, userID)
+	logger.Log.Infow("[INLINE] query", "user", userID, "query", query)
 
 	var results []models.InlineQueryResult
 
 	if len(query) >= constants.MinSearchLength {
 		stickers, err := b.repo.SearchByText(userID, query)
 		if err != nil {
-			log.Printf("[INLINE] search error: user=%d query=%q err=%v", userID, query, err)
+			logger.Log.Errorw("[INLINE] search error", "user", userID, "query", query, "error", err)
 		} else {
 			// Limit to 50 results (Telegram max)
 			limit := 50
@@ -1017,7 +1016,7 @@ func (b *Bot) handleInlineQuery(ctx context.Context, tgBot *bot.Bot, update *mod
 					StickerFileID: stickers[i].FileID,
 				})
 			}
-			log.Printf("[INLINE] found %d stickers, returning %d: user=%d query=%q", len(stickers), limit, userID, query)
+			logger.Log.Infow("[INLINE] found", "user", userID, "query", query, "total", len(stickers), "returned", limit)
 		}
 	}
 

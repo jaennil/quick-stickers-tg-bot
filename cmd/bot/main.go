@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/jaennil/sticker-search-bot/internal/bot"
 	"github.com/jaennil/sticker-search-bot/internal/config"
+	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/repository/postgres"
@@ -17,18 +17,21 @@ import (
 )
 
 func main() {
+	logger.Init()
+	defer logger.Sync()
+
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Log.Fatalf("Failed to load config: %v", err)
 	}
 
 	if cfg.Telegram.Token == "" {
-		log.Fatal("telegram.token is required in config.yaml")
+		logger.Log.Fatal("telegram.token is required in config.yaml")
 	}
 
 	repo, err := newRepository(cfg.Database)
 	if err != nil {
-		log.Fatalf("Failed to initialize repository: %v", err)
+		logger.Log.Fatalf("Failed to initialize repository: %v", err)
 	}
 	defer repo.Close()
 
@@ -36,7 +39,7 @@ func main() {
 
 	b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
 	if err != nil {
-		log.Fatalf("Failed to create bot: %v", err)
+		logger.Log.Fatalf("Failed to create bot: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,7 +49,7 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		log.Println("Shutting down...")
+		logger.Log.Info("Shutting down...")
 		cancel()
 	}()
 
