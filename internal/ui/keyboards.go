@@ -115,3 +115,13 @@ func EmptyListButtons() [][]models.InlineKeyboardButton {
 		BackButton(),
 	}
 }
+
+// FallbackButtons creates buttons for OCR fallback selection
+// setName is used to continue indexing with selected engine
+func FallbackButtons(setName string) [][]models.InlineKeyboardButton {
+	return [][]models.InlineKeyboardButton{
+		{{Text: "🔹 EasyOCR", CallbackData: "fallback:easy:" + setName}},
+		{{Text: "🔸 PaddleOCR", CallbackData: "fallback:paddle:" + setName}},
+		{{Text: "❌ Отменить", CallbackData: "menu:main"}},
+	}
+}

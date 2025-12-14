@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -17,6 +18,9 @@ import (
 
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 )
+
+// ErrQuotaExceeded is returned when OCR.space API quota is exceeded
+var ErrQuotaExceeded = errors.New("ocr.space quota exceeded")
 
 type OCR struct {
 	apiKeys     []string
@@ -74,7 +78,11 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string
 		if err == nil && text != "" {
 			return text, nil
 		}
-		// fallback to easyocr
+		// If quota exceeded, propagate error (let caller decide)
+		if errors.Is(err, ErrQuotaExceeded) {
+			return "", err
+		}
+		// fallback to easyocr for other errors
 		logger.Log.Warnw("[OCR] api failed, falling back to easyocr", "error", err)
 		return o.recognizeViaLocalServer(ctx, imagePath, "easy")
 
@@ -198,6 +206,13 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 		return "", err
 	}
 
+	// Check for quota exceeded (returns plain string, not JSON)
+	respStr := string(respBody)
+	if strings.Contains(respStr, "maximum") && strings.Contains(respStr, "times within") {
+		logger.Log.Warnw("[OCR] ocr.space quota exceeded", "key", maskedKey)
+		return "", ErrQuotaExceeded
+	}
+
 	var result ocrSpaceResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		logger.Log.Errorw("[OCR] ocr.space invalid response", "key", maskedKey, "response", string(respBody[:min(len(respBody), 200)]))
@@ -237,6 +252,38 @@ func cleanText(text string) string {
 // IsAvailable проверяет доступен ли OCR API
 func (o *OCR) IsAvailable() bool {
 	return len(o.apiKeys) > 0
+}
+
+// CompareEngines runs all available OCR engines on the image and returns results
+type CompareResult struct {
+	Engine string
+	Text   string
+	Error  error
+}
+
+func (o *OCR) CompareEngines(ctx context.Context, imagePath string) []CompareResult {
+	engines := []string{"easy", "paddle", "tesseract"}
+	results := make([]CompareResult, len(engines))
+
+	for i, engine := range engines {
+		var text string
+		var err error
+
+		switch engine {
+		case "easy", "paddle":
+			text, err = o.recognizeViaLocalServer(ctx, imagePath, engine)
+		case "tesseract":
+			text, err = o.recognizeViaTesseract(ctx, imagePath)
+		}
+
+		results[i] = CompareResult{
+			Engine: engine,
+			Text:   text,
+			Error:  err,
+		}
+	}
+
+	return results
 }
 
 // recognizeViaTesseract - fallback на локальный Tesseract

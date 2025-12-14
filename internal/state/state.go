@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/go-telegram/bot/models"
 )
 
 type AwaitingMode int
@@ -27,19 +29,28 @@ type OCRResult struct {
 	CreatedAt time.Time
 }
 
+type RemainingPack struct {
+	SetName   string
+	Stickers  []models.Sticker
+	CreatedAt time.Time
+}
+
 type Manager struct {
-	users      map[int64]*UserState
-	usersMu    sync.RWMutex
-	pendingOCR map[string]*OCRResult
-	ocrMu      sync.RWMutex
-	ttl        time.Duration
+	users          map[int64]*UserState
+	usersMu        sync.RWMutex
+	pendingOCR     map[string]*OCRResult
+	ocrMu          sync.RWMutex
+	remainingPacks map[int64]*RemainingPack
+	remainingMu    sync.RWMutex
+	ttl            time.Duration
 }
 
 func NewManager(ttl time.Duration) *Manager {
 	m := &Manager{
-		users:      make(map[int64]*UserState),
-		pendingOCR: make(map[string]*OCRResult),
-		ttl:        ttl,
+		users:          make(map[int64]*UserState),
+		pendingOCR:     make(map[string]*OCRResult),
+		remainingPacks: make(map[int64]*RemainingPack),
+		ttl:            ttl,
 	}
 	go m.cleanupLoop()
 	return m
@@ -63,6 +74,14 @@ func (m *Manager) cleanup() {
 		}
 	}
 	m.ocrMu.Unlock()
+
+	m.remainingMu.Lock()
+	for id, pack := range m.remainingPacks {
+		if now.Sub(pack.CreatedAt) > m.ttl {
+			delete(m.remainingPacks, id)
+		}
+	}
+	m.remainingMu.Unlock()
 
 	m.usersMu.Lock()
 	for id, state := range m.users {
@@ -172,4 +191,29 @@ func (m *Manager) DeletePendingOCR(stickerID string) {
 	m.ocrMu.Lock()
 	defer m.ocrMu.Unlock()
 	delete(m.pendingOCR, stickerID)
+}
+
+func (m *Manager) SetRemainingStickers(userID int64, setName string, stickers []models.Sticker) {
+	m.remainingMu.Lock()
+	defer m.remainingMu.Unlock()
+	m.remainingPacks[userID] = &RemainingPack{
+		SetName:   setName,
+		Stickers:  stickers,
+		CreatedAt: time.Now(),
+	}
+}
+
+func (m *Manager) GetRemainingStickers(userID int64) (string, []models.Sticker, bool) {
+	m.remainingMu.RLock()
+	defer m.remainingMu.RUnlock()
+	if pack, ok := m.remainingPacks[userID]; ok {
+		return pack.SetName, pack.Stickers, true
+	}
+	return "", nil, false
+}
+
+func (m *Manager) ClearRemainingStickers(userID int64) {
+	m.remainingMu.Lock()
+	defer m.remainingMu.Unlock()
+	delete(m.remainingPacks, userID)
 }

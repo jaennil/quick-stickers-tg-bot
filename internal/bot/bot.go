@@ -43,6 +43,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler("ocr:", bot.MatchTypePrefix, b.handleOCRCallback),
 		bot.WithCallbackQueryDataHandler("selectocr:", bot.MatchTypePrefix, b.handleSelectOCRCallback),
 		bot.WithCallbackQueryDataHandler("list:", bot.MatchTypePrefix, b.handleListCallback),
+		bot.WithCallbackQueryDataHandler("fallback:", bot.MatchTypePrefix, b.handleFallbackCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -457,6 +458,56 @@ func (b *Bot) handleListCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	})
 
 	b.sendStickerListMsg(ctx, tgBot, chatID, userID, page)
+}
+
+func (b *Bot) handleFallbackCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	// Format: fallback:engine:setName
+	data := strings.TrimPrefix(update.CallbackQuery.Data, "fallback:")
+	parts := strings.SplitN(data, ":", 2)
+	if len(parts) != 2 {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка",
+		})
+		return
+	}
+
+	engine, setName := parts[0], parts[1]
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+	messageID := update.CallbackQuery.Message.Message.ID
+	logger.Log.Infow("[CALLBACK] fallback", "engine", engine, "pack", setName, "user", userID)
+
+	// Get remaining stickers
+	storedSetName, remainingStickers, ok := b.state.GetRemainingStickers(userID)
+	if !ok || storedSetName != setName {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Данные устарели, начни индексацию заново",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	if b.state.HasActiveIndexing(userID) {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "У тебя уже идёт индексация",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            fmt.Sprintf("Продолжаю с %s...", constants.GetEngineLabel(engine)),
+	})
+
+	// Clear remaining stickers
+	b.state.ClearRemainingStickers(userID)
+
+	// Continue indexing with selected engine
+	go b.continueIndexing(ctx, tgBot, chatID, messageID, userID, setName, engine, remainingStickers)
 }
 
 // Default handler
@@ -967,7 +1018,7 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 		})
 	})
 
-	if result.Cancelled {
+	if result.Cancelled && !result.QuotaExceeded {
 		logger.Log.Infow("[ADDPACK] cancelled", "pack", setName, "user", userID, "processed", result.Processed)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
@@ -977,12 +1028,108 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 				InlineKeyboard: [][]models.InlineKeyboardButton{ui.BackToMenuButton()},
 			},
 		})
+	} else if result.QuotaExceeded {
+		logger.Log.Warnw("[ADDPACK] quota exceeded", "pack", setName, "user", userID, "processed", result.Processed, "remaining", len(result.RemainingStickers))
+
+		// Run comparison on last sticker
+		compareText := "⚠️ Квота OCR.space исчерпана!\n\n"
+		compareText += fmt.Sprintf("Обработано: %d/%d стикеров\n\n", result.Processed, result.Total)
+
+		if result.LastStickerFileURL != "" {
+			compareText += "🔍 Сравнение OCR движков на последнем стикере:\n\n"
+			comparison := b.indexer.CompareOCREngines(ctx, result.LastStickerFileURL)
+			for _, r := range comparison {
+				engineName := constants.GetEngineLabel(r.Engine)
+				if r.Error != nil {
+					compareText += fmt.Sprintf("❌ %s: ошибка\n", engineName)
+				} else if r.Text == "" {
+					compareText += fmt.Sprintf("⬜ %s: (пусто)\n", engineName)
+				} else {
+					compareText += fmt.Sprintf("✅ %s: \"%s\"\n", engineName, r.Text)
+				}
+			}
+			compareText += "\nВыбери движок для продолжения:"
+		} else {
+			compareText += "Выбери движок для продолжения:"
+		}
+
+		// Store remaining stickers for continuation
+		b.state.SetRemainingStickers(userID, setName, result.RemainingStickers)
+
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      compareText,
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: ui.FallbackButtons(setName),
+			},
+		})
 	} else {
 		logger.Log.Infow("[ADDPACK] completed", "pack", setName, "user", userID, "processed", result.Processed, "with_text", result.WithText)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: progressMsg.ID,
 			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, result.Processed, result.WithText),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: ui.AddPackAgainButtons(),
+			},
+		})
+	}
+}
+
+func (b *Bot) continueIndexing(ctx context.Context, tgBot *bot.Bot, chatID int64, messageID int, userID int64, setName string, engine string, stickers []models.Sticker) {
+	total := len(stickers)
+	logger.Log.Infow("[ADDPACK] continuing with fallback", "pack", setName, "engine", engine, "remaining", total, "user", userID)
+
+	// Create fake sticker set with remaining stickers
+	stickerSet := &models.StickerSet{
+		Name:     setName,
+		Title:    setName,
+		Stickers: stickers,
+	}
+
+	indexCtx, cancel := context.WithCancel(ctx)
+	b.state.SetActiveIndexing(userID, cancel)
+	defer b.state.ClearActiveIndexing(userID)
+
+	// Update message
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("Продолжаю индексацию \"%s\" с %s\n%s 0%%", setName, constants.GetEngineLabel(engine), service.ProgressBar(0, total)),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{ui.CancelButton(userID)},
+		},
+	})
+
+	result := b.indexer.IndexPack(indexCtx, tgBot, stickerSet, userID, engine, func(p service.IndexProgress) {
+		percent := p.Current * 100 / int64(p.Total)
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      fmt.Sprintf("Продолжаю индексацию \"%s\" с %s\n%s %d%%\n\nОбработано: %d/%d", setName, constants.GetEngineLabel(engine), service.ProgressBar(int(p.Current), p.Total), percent, p.Current, p.Total),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{ui.CancelButton(userID)},
+			},
+		})
+	})
+
+	if result.Cancelled {
+		logger.Log.Infow("[ADDPACK] continuation cancelled", "pack", setName, "user", userID, "processed", result.Processed)
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      fmt.Sprintf("⛔ Индексация пака \"%s\" отменена\n\nУспело сохраниться: %d стикеров", setName, result.Processed),
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{ui.BackToMenuButton()},
+			},
+		})
+	} else {
+		logger.Log.Infow("[ADDPACK] continuation completed", "pack", setName, "user", userID, "processed", result.Processed, "with_text", result.WithText)
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", setName, result.Processed, result.WithText),
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: ui.AddPackAgainButtons(),
 			},
