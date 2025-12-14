@@ -1,13 +1,15 @@
 package repository
 
 type Sticker struct {
-	ID        int64
-	UserID    int64
-	StickerID string
-	SetName   string
-	FileID    string
-	Text      string
-	Emoji     string
+	ID         int64
+	UserID     int64
+	StickerID  string
+	SetName    string
+	FileID     string
+	Text       string
+	Emoji      string
+	OCREngine  string
+	ManualEdit bool
 }
 
 type Repository interface {
@@ -16,6 +18,7 @@ type Repository interface {
 	SearchByText(userID int64, query string) ([]*Sticker, error)
 	GetUserStickerCount(userID int64) (int, error)
 	GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error)
+	GetStickersBySetName(userID int64, setName string) (map[string]*Sticker, error)
 	UpdateStickerText(userID int64, stickerID string, text string) error
 
 	// Thumbnails

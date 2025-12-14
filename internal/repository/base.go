@@ -53,21 +53,22 @@ func (r *BaseRepository) SetUserOCREngine(userID int64, engine string) error {
 func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 	textLower := strings.ToLower(sticker.Text)
 	query := r.db.Rebind(`
-		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, text, text_lower, emoji)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, text, text_lower, emoji, ocr_engine)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, sticker_id) DO UPDATE SET
 			text = EXCLUDED.text,
 			text_lower = EXCLUDED.text_lower,
-			emoji = EXCLUDED.emoji
+			emoji = EXCLUDED.emoji,
+			ocr_engine = EXCLUDED.ocr_engine
 	`)
-	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.Text, textLower, sticker.Emoji)
+	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.Text, textLower, sticker.Emoji, sticker.OCREngine)
 	return err
 }
 
 func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, error) {
 	queryLower := strings.ToLower(query)
 	sqlQuery := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
 		FROM stickers
 		WHERE user_id = ? AND text_lower LIKE ?
 		LIMIT 50
@@ -81,7 +82,7 @@ func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, e
 	var stickers []*Sticker
 	for rows.Next() {
 		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji); err != nil {
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
 			return nil, err
 		}
 		stickers = append(stickers, &st)
@@ -97,7 +98,7 @@ func (r *BaseRepository) GetUserStickerCount(userID int64) (int, error) {
 
 func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error) {
 	query := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
 		FROM stickers
 		WHERE user_id = ?
 		ORDER BY id DESC
@@ -112,7 +113,7 @@ func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*St
 	var stickers []*Sticker
 	for rows.Next() {
 		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji); err != nil {
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
 			return nil, err
 		}
 		stickers = append(stickers, &st)
@@ -120,9 +121,32 @@ func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*St
 	return stickers, rows.Err()
 }
 
+func (r *BaseRepository) GetStickersBySetName(userID int64, setName string) (map[string]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		FROM stickers
+		WHERE user_id = ? AND set_name = ?
+	`)
+	rows, err := r.db.Query(query, userID, setName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stickers := make(map[string]*Sticker)
+	for rows.Next() {
+		var st Sticker
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
+			return nil, err
+		}
+		stickers[st.StickerID] = &st
+	}
+	return stickers, rows.Err()
+}
+
 func (r *BaseRepository) UpdateStickerText(userID int64, stickerID string, text string) error {
 	textLower := strings.ToLower(text)
-	query := r.db.Rebind("UPDATE stickers SET text = ?, text_lower = ? WHERE user_id = ? AND sticker_id = ?")
+	query := r.db.Rebind("UPDATE stickers SET text = ?, text_lower = ?, manual_edit = TRUE WHERE user_id = ? AND sticker_id = ?")
 	_, err := r.db.Exec(query, text, textLower, userID, stickerID)
 	return err
 }

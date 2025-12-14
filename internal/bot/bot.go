@@ -73,6 +73,37 @@ func (b *Bot) Start(ctx context.Context) {
 	b.bot.Start(ctx)
 }
 
+// formatIndexReport formats the IndexReport for display to user
+func formatIndexReport(title string, report *service.IndexReport) string {
+	if report == nil {
+		return fmt.Sprintf("✅ Пак \"%s\" добавлен!", title)
+	}
+
+	text := fmt.Sprintf("✅ Пак \"%s\" обработан!\n\n📊 Отчёт:\n", title)
+	text += fmt.Sprintf("• Всего в паке: %d\n", report.Total)
+
+	if report.SkippedAPI > 0 {
+		text += fmt.Sprintf("• Пропущено (уже api): %d\n", report.SkippedAPI)
+	}
+	if report.SkippedManual > 0 {
+		text += fmt.Sprintf("• Пропущено (ручное редактирование): %d\n", report.SkippedManual)
+	}
+	if report.Reprocessed > 0 {
+		text += fmt.Sprintf("• Переобработано: %d\n", report.Reprocessed)
+	}
+	if report.NewStickers > 0 {
+		text += fmt.Sprintf("• Новых стикеров: %d\n", report.NewStickers)
+	}
+	if report.WithText > 0 {
+		text += fmt.Sprintf("• С текстом: %d\n", report.WithText)
+	}
+	if report.ToProcess == 0 {
+		text += "\n💡 Все стикеры уже обработаны!"
+	}
+
+	return text
+}
+
 // Command handlers
 
 func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -754,14 +785,27 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 			text = "(текст не распознан)"
 		}
 
+		// Build info line with engine/manual edit
+		var infoLine string
+		if st.ManualEdit {
+			infoLine = "✏️ отредактировано"
+		} else if st.OCREngine != "" {
+			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
+		}
+
 		tgBot.SendSticker(ctx, &bot.SendStickerParams{
 			ChatID:  chatID,
 			Sticker: &models.InputFileString{Data: st.FileID},
 		})
 
+		msgText := fmt.Sprintf("Текст: %s", text)
+		if infoLine != "" {
+			msgText += fmt.Sprintf("\n%s", infoLine)
+		}
+
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
-			Text:   fmt.Sprintf("Текст: %s", text),
+			Text:   msgText,
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(st.StickerID)},
 			},
@@ -803,14 +847,27 @@ func (b *Bot) sendStickerList(ctx context.Context, tgBot *bot.Bot, chatID int64,
 			text = "(текст не распознан)"
 		}
 
+		// Build info line with engine/manual edit
+		var infoLine string
+		if st.ManualEdit {
+			infoLine = "✏️ отредактировано"
+		} else if st.OCREngine != "" {
+			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
+		}
+
 		tgBot.SendSticker(ctx, &bot.SendStickerParams{
 			ChatID:  chatID,
 			Sticker: &models.InputFileString{Data: st.FileID},
 		})
 
+		msgText := fmt.Sprintf("Текст: %s", text)
+		if infoLine != "" {
+			msgText += fmt.Sprintf("\n%s", infoLine)
+		}
+
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
-			Text:   fmt.Sprintf("Текст: %s", text),
+			Text:   msgText,
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(st.StickerID)},
 			},
@@ -1080,11 +1137,17 @@ func (b *Bot) doAddPack(ctx context.Context, tgBot *bot.Bot, chatID int64, userI
 			},
 		})
 	} else {
-		logger.Log.Infow("[ADDPACK] completed", "pack", setName, "user", userID, "processed", result.Processed, "with_text", result.WithText)
+		logger.Log.Infow("[ADDPACK] completed", "pack", setName, "user", userID,
+			"processed", result.Processed,
+			"with_text", result.WithText,
+			"skipped_api", result.Report.SkippedAPI,
+			"skipped_manual", result.Report.SkippedManual,
+			"reprocessed", result.Report.Reprocessed,
+		)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: progressMsg.ID,
-			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", stickerSet.Title, result.Processed, result.WithText),
+			Text:      formatIndexReport(stickerSet.Title, result.Report),
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: ui.AddPackAgainButtons(),
 			},
@@ -1144,7 +1207,7 @@ func (b *Bot) continueIndexing(ctx context.Context, tgBot *bot.Bot, chatID int64
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: messageID,
-			Text:      fmt.Sprintf("✅ Пак \"%s\" добавлен!\n\nСтикеров: %d\nС текстом: %d", setName, result.Processed, result.WithText),
+			Text:      formatIndexReport(setName, result.Report),
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: ui.AddPackAgainButtons(),
 			},

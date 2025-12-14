@@ -30,11 +30,28 @@ type IndexProgress struct {
 	QuotaExceeded      bool
 	LastStickerFileURL string
 	RemainingStickers  []models.Sticker
+	Report             *IndexReport
+}
+
+type IndexReport struct {
+	Total          int // всего в паке
+	ToProcess      int // нужно обработать
+	SkippedAPI     int // пропущено (уже api)
+	SkippedManual  int // пропущено (manual_edit)
+	Reprocessed    int // переобработано (было local → стало api)
+	NewStickers    int // новые стикеры
+	WithText       int // с текстом
+	APIUnavailable bool
 }
 
 type thumbJob struct {
 	FileID  string
 	FileURL string
+}
+
+type stickerJob struct {
+	Sticker      models.Sticker
+	IsReprocess  bool // переобработка существующего
 }
 
 type ProgressCallback func(progress IndexProgress)
@@ -59,16 +76,69 @@ func (i *Indexer) IndexPack(
 	total := len(stickerSet.Stickers)
 	setName := stickerSet.Name
 
+	report := &IndexReport{Total: total}
+
+	// Get existing stickers for this pack
+	existingStickers, err := i.repo.GetStickersBySetName(userID, setName)
+	if err != nil {
+		logger.Log.Errorw("[INDEX] failed to get existing stickers", "error", err)
+		existingStickers = make(map[string]*repository.Sticker)
+	}
+
+	// Filter stickers to process
+	var stickersToProcess []stickerJob
+	for _, sticker := range stickerSet.Stickers {
+		existing, exists := existingStickers[sticker.FileUniqueID]
+		if exists {
+			// Skip if manually edited
+			if existing.ManualEdit {
+				report.SkippedManual++
+				continue
+			}
+			// Skip if already processed by api
+			if existing.OCREngine == "api" {
+				report.SkippedAPI++
+				continue
+			}
+			// Reprocess if processed by local engine
+			stickersToProcess = append(stickersToProcess, stickerJob{
+				Sticker:     sticker,
+				IsReprocess: true,
+			})
+		} else {
+			// New sticker
+			stickersToProcess = append(stickersToProcess, stickerJob{
+				Sticker:     sticker,
+				IsReprocess: false,
+			})
+			report.NewStickers++
+		}
+	}
+
+	report.ToProcess = len(stickersToProcess)
+
 	logger.Log.Infow("[INDEX] starting pack indexing",
 		"pack", setName,
 		"total", total,
-		"engine", ocrEngine,
+		"to_process", report.ToProcess,
+		"skipped_api", report.SkippedAPI,
+		"skipped_manual", report.SkippedManual,
+		"new", report.NewStickers,
 		"workers", constants.Workers,
 		"user", userID,
 	)
 
+	// If nothing to process, return early
+	if len(stickersToProcess) == 0 {
+		return IndexProgress{
+			Total:  total,
+			Report: report,
+		}
+	}
+
 	var processed atomic.Int64
 	var withText atomic.Int64
+	var reprocessed atomic.Int64
 	var completed atomic.Int64
 	var cancelled atomic.Bool
 	var quotaExceeded atomic.Bool
@@ -80,7 +150,7 @@ func (i *Indexer) IndexPack(
 	indexCtx, cancelIndex := context.WithCancel(ctx)
 	defer cancelIndex()
 
-	jobs := make(chan models.Sticker, constants.Workers)
+	jobs := make(chan stickerJob, constants.Workers)
 	thumbJobs := make(chan thumbJob, constants.Workers)
 	var wg sync.WaitGroup
 	var thumbWg sync.WaitGroup
@@ -120,7 +190,8 @@ func (i *Indexer) IndexPack(
 			time.Sleep(time.Duration(workerID*50) * time.Millisecond)
 			logger.Log.Debugw("[INDEX] worker started", "worker", workerID)
 
-			for sticker := range jobs {
+			for job := range jobs {
+				sticker := job.Sticker
 				select {
 				case <-indexCtx.Done():
 					cancelled.Store(true)
@@ -141,11 +212,12 @@ func (i *Indexer) IndexPack(
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, ocrErr := i.DownloadAndOCR(indexCtx, fileURL, ocrEngine)
+				// Always use api engine for reindexing
+				text, ocrErr := i.DownloadAndOCR(indexCtx, fileURL, "api")
 
 				// Check for quota exceeded
 				if errors.Is(ocrErr, ocr.ErrQuotaExceeded) {
-					logger.Log.Warnw("[INDEX] quota exceeded, pausing",
+					logger.Log.Warnw("[INDEX] quota exceeded, stopping",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,
 					)
@@ -170,6 +242,7 @@ func (i *Indexer) IndexPack(
 					FileID:    sticker.FileID,
 					Text:      text,
 					Emoji:     sticker.Emoji,
+					OCREngine: "api",
 				}
 
 				if err := i.repo.SaveSticker(s); err != nil {
@@ -180,6 +253,9 @@ func (i *Indexer) IndexPack(
 					)
 				} else {
 					processed.Add(1)
+					if job.IsReprocess {
+						reprocessed.Add(1)
+					}
 					// Queue thumbnail download (non-blocking)
 					select {
 					case thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL}:
@@ -193,12 +269,14 @@ func (i *Indexer) IndexPack(
 							"sticker", sticker.FileUniqueID,
 							"text", text,
 							"emoji", sticker.Emoji,
+							"reprocess", job.IsReprocess,
 						)
 					} else {
 						logger.Log.Debugw("[INDEX] sticker processed (no text)",
 							"worker", workerID,
 							"sticker", sticker.FileUniqueID,
 							"emoji", sticker.Emoji,
+							"reprocess", job.IsReprocess,
 						)
 					}
 				}
@@ -209,16 +287,18 @@ func (i *Indexer) IndexPack(
 
 	// Send jobs in goroutine
 	go func() {
-		for idx, sticker := range stickerSet.Stickers {
+		for idx, job := range stickersToProcess {
 			select {
 			case <-indexCtx.Done():
 				// Collect remaining stickers
 				remainingMu.Lock()
-				remainingStickers = append(remainingStickers, stickerSet.Stickers[idx:]...)
+				for _, j := range stickersToProcess[idx:] {
+					remainingStickers = append(remainingStickers, j.Sticker)
+				}
 				remainingMu.Unlock()
 				close(jobs)
 				return
-			case jobs <- sticker:
+			case jobs <- job:
 			}
 		}
 		close(jobs)
@@ -227,6 +307,7 @@ func (i *Indexer) IndexPack(
 	// Progress updates
 	go func() {
 		lastUpdate := int64(0)
+		toProcess := int64(len(stickersToProcess))
 		for {
 			select {
 			case <-indexCtx.Done():
@@ -235,14 +316,14 @@ func (i *Indexer) IndexPack(
 			}
 
 			current := completed.Load()
-			if current >= int64(total) {
+			if current >= toProcess {
 				break
 			}
 			if current-lastUpdate >= constants.ProgressUpdateInterval {
 				if onProgress != nil {
 					onProgress(IndexProgress{
 						Current:       current,
-						Total:         total,
+						Total:         int(toProcess),
 						Processed:     processed.Load(),
 						WithText:      withText.Load(),
 						Cancelled:     cancelled.Load(),
@@ -269,22 +350,31 @@ func (i *Indexer) IndexPack(
 	remaining := remainingStickers
 	remainingMu.Unlock()
 
+	report.Reprocessed = int(reprocessed.Load())
+	report.WithText = int(withText.Load())
+	report.APIUnavailable = quotaExceeded.Load()
+
 	result := IndexProgress{
 		Current:            completed.Load(),
-		Total:              total,
+		Total:              len(stickersToProcess),
 		Processed:          processed.Load(),
 		WithText:           withText.Load(),
 		Cancelled:          cancelled.Load(),
 		QuotaExceeded:      quotaExceeded.Load(),
 		LastStickerFileURL: lastURL,
 		RemainingStickers:  remaining,
+		Report:             report,
 	}
 
 	logger.Log.Infow("[INDEX] pack indexing completed",
 		"pack", setName,
 		"total", total,
+		"to_process", report.ToProcess,
 		"processed", result.Processed,
+		"reprocessed", report.Reprocessed,
 		"with_text", result.WithText,
+		"skipped_api", report.SkippedAPI,
+		"skipped_manual", report.SkippedManual,
 		"cancelled", result.Cancelled,
 		"quota_exceeded", result.QuotaExceeded,
 		"remaining", len(result.RemainingStickers),
