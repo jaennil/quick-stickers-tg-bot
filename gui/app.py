@@ -23,8 +23,9 @@ from pynput import keyboard
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QListWidget, QListWidgetItem, QLabel,
-    QComboBox, QPushButton, QListView
+    QComboBox, QPushButton, QListView, QCompleter
 )
+from PyQt6.QtCore import QStringListModel
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject, QTimer, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QKeySequence, QShortcut, QCursor, QIcon, QPixmap, QImage, QPainter, QColor, QPen, QWheelEvent
 from pyrogram import Client
@@ -90,109 +91,79 @@ class SmoothScrollListWidget(QListWidget):
         event.accept()
 
 
-class SearchableComboBox(QComboBox):
-    """QComboBox with search/filter functionality"""
+class SearchableChatSelector(QWidget):
+    """Custom widget with QLineEdit + QCompleter for chat search"""
 
-    # Signal emitted only when user explicitly selects an item
-    itemSelected = pyqtSignal(object)  # emits the data object
+    # Signal emitted when user selects a chat
+    chatSelected = pyqtSignal(object)  # emits ChatInfo object
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setEditable(True)
-        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._chats: List[ChatInfo] = []
+        self._chat_map: Dict[str, ChatInfo] = {}  # display_text -> ChatInfo
+        self._selected_chat: Optional[ChatInfo] = None
 
-        # Store original items for filtering
-        self._all_items: List[tuple] = []  # (display_text, data)
-        self._selected_data = None  # Currently selected data
-        self._is_filtering = False
+        # Create line edit
+        self._line_edit = QLineEdit()
+        self._line_edit.setPlaceholderText("Search chats...")
 
-        # Filter on text change
-        self.lineEdit().textEdited.connect(self._filter_items)
+        # Create completer
+        self._model = QStringListModel()
+        self._completer = QCompleter(self._model, self)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._line_edit.setCompleter(self._completer)
 
-        # Handle explicit selection (click or Enter in dropdown)
-        self.activated.connect(self._on_activated)
+        # Connect selection
+        self._completer.activated.connect(self._on_completer_activated)
 
-        # Handle Enter in line edit
-        self.lineEdit().returnPressed.connect(self._on_return_pressed)
+        # Layout
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._line_edit)
+        self.setLayout(layout)
 
-    def addItemWithData(self, text: str, data):
-        """Add item and store for filtering"""
-        self._all_items.append((text, data))
-        super().addItem(text, data)
+    def setChats(self, chats: List[ChatInfo]):
+        """Set the list of chats"""
+        self._chats = chats
+        self._chat_map.clear()
 
-    def clearItems(self):
-        """Clear all items"""
-        self._all_items.clear()
-        self._selected_data = None
-        self.clear()
+        display_names = []
+        for chat in chats:
+            icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
+            display_name = f"{icon} {chat.name}"
+            display_names.append(display_name)
+            self._chat_map[display_name] = chat
 
-    def _filter_items(self, text: str):
-        """Filter items based on search text"""
-        self._is_filtering = True
+        self._model.setStringList(display_names)
 
-        # Save cursor position
-        cursor_pos = self.lineEdit().cursorPosition()
+    def _on_completer_activated(self, text: str):
+        """Handle selection from completer"""
+        chat = self._chat_map.get(text)
+        if chat:
+            self._selected_chat = chat
+            self.chatSelected.emit(chat)
 
-        # Clear and repopulate with filtered items
-        self.blockSignals(True)
-        self.clear()
+    def selectedChat(self) -> Optional[ChatInfo]:
+        """Get currently selected chat"""
+        return self._selected_chat
 
-        filter_text = text.lower()
+    def setSelectedChat(self, chat: ChatInfo):
+        """Set selected chat and update display"""
+        self._selected_chat = chat
+        if chat:
+            icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
+            self._line_edit.setText(f"{icon} {chat.name}")
 
-        for item_text, item_data in self._all_items:
-            if not filter_text or filter_text in item_text.lower():
-                self.addItem(item_text, item_data)
+    def lineEdit(self) -> QLineEdit:
+        """Get the line edit widget"""
+        return self._line_edit
 
-        # Restore search text (clear() removes it)
-        self.lineEdit().setText(text)
-        self.lineEdit().setCursorPosition(cursor_pos)
-
-        self.blockSignals(False)
-
-        self._is_filtering = False
-
-    def _on_activated(self, index: int):
-        """Handle user selecting an item from dropdown"""
-        if index >= 0:
-            data = self.itemData(index)
-            self._selected_data = data
-            self.lineEdit().setText(self.itemText(index))
-            self.hidePopup()
-            self.itemSelected.emit(data)
-
-    def _on_return_pressed(self):
-        """Handle Enter key in line edit"""
-        # If dropdown is visible and has items, select first one
-        if self.count() > 0:
-            self._on_activated(0)
-
-    def selectedData(self):
-        """Get currently selected data"""
-        return self._selected_data
-
-    def setCurrentByData(self, data):
-        """Set current item by data object"""
-        self._selected_data = data
-        for i in range(self.count()):
-            item_data = self.itemData(i)
-            if item_data and data and hasattr(item_data, 'id') and hasattr(data, 'id'):
-                if item_data.id == data.id:
-                    self.blockSignals(True)
-                    self.setCurrentIndex(i)
-                    self.lineEdit().setText(self.itemText(i))
-                    self.blockSignals(False)
-                    return
-
-    def resetFilter(self):
-        """Reset filter and show all items"""
-        self.blockSignals(True)
-        self.clear()
-        for item_text, item_data in self._all_items:
-            self.addItem(item_text, item_data)
-        # Restore selection
-        if self._selected_data:
-            self.setCurrentByData(self._selected_data)
-        self.blockSignals(False)
+    def clear(self):
+        """Clear selection and text"""
+        self._line_edit.clear()
+        self._selected_chat = None
 
 
 class SignalBridge(QObject):
@@ -250,15 +221,14 @@ class StickerSearchApp(QWidget):
         chat_layout = QHBoxLayout()
         chat_label = QLabel("Chat:")
         chat_label.setFixedWidth(40)
-        self.chat_combo = SearchableComboBox()
-        self.chat_combo.setMinimumWidth(350)
-        self.chat_combo.lineEdit().setPlaceholderText("Search chats...")
-        self.chat_combo.itemSelected.connect(self.on_chat_selected)
+        self.chat_selector = SearchableChatSelector()
+        self.chat_selector.setMinimumWidth(350)
+        self.chat_selector.chatSelected.connect(self.on_chat_selected)
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setFixedWidth(30)
         self.refresh_btn.clicked.connect(self.refresh_chats)
         chat_layout.addWidget(chat_label)
-        chat_layout.addWidget(self.chat_combo, 1)
+        chat_layout.addWidget(self.chat_selector, 1)
         chat_layout.addWidget(self.refresh_btn)
         layout.addLayout(chat_layout)
 
@@ -510,18 +480,15 @@ class StickerSearchApp(QWidget):
     def _on_chats_loaded(self, chats: List[ChatInfo]):
         """Handle chats loaded signal"""
         self.chats = chats
-        self.chat_combo.clearItems()
+        self.chat_selector.setChats(chats)
 
-        saved_chat = None
-        for chat in chats:
-            icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
-            self.chat_combo.addItemWithData(f"{icon} {chat.name}", chat)
-            if self._saved_chat_id and chat.id == self._saved_chat_id:
-                saved_chat = chat
-
-        if saved_chat:
-            self.chat_combo.setCurrentByData(saved_chat)
-            self.selected_chat = saved_chat
+        # Restore saved chat
+        if self._saved_chat_id:
+            for chat in chats:
+                if chat.id == self._saved_chat_id:
+                    self.chat_selector.setSelectedChat(chat)
+                    self.selected_chat = chat
+                    break
 
         self.status_label.setText("Ready • Ctrl+Shift+S to toggle")
 
@@ -579,7 +546,8 @@ class StickerSearchApp(QWidget):
         chat_name_lower = chat_name.lower()
         for chat in self.chats:
             if chat.name.lower() == chat_name_lower:
-                self.chat_combo.setCurrentByData(chat)
+                self.chat_selector.setSelectedChat(chat)
+                self.selected_chat = chat
                 return
 
     def _show_window(self):
