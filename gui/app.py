@@ -92,12 +92,12 @@ class SmoothScrollListWidget(QListWidget):
 
 
 class ClickableLineEdit(QLineEdit):
-    """QLineEdit that emits signal on mouse click"""
-    clicked = pyqtSignal()
+    """QLineEdit that emits signal on focus"""
+    focused = pyqtSignal()
 
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        self.clicked.emit()
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.focused.emit()
 
 
 class SearchableChatSelector(QWidget):
@@ -116,7 +116,7 @@ class SearchableChatSelector(QWidget):
         # Create line edit
         self._line_edit = ClickableLineEdit()
         self._line_edit.setPlaceholderText("Search chats...")
-        self._line_edit.clicked.connect(self._on_click)
+        self._line_edit.focused.connect(self._on_focus)
         self._line_edit.textChanged.connect(self._on_text_changed)
 
         # Create completer
@@ -136,9 +136,11 @@ class SearchableChatSelector(QWidget):
         layout.addWidget(self._line_edit)
         self.setLayout(layout)
 
-    def _on_click(self):
-        """Show all chats when clicking on empty field"""
-        if not self._line_edit.text() and self._display_names:
+    def _on_focus(self):
+        """Show all chats when the field receives focus"""
+        if self._display_names:
+            # Select all text so user can easily type to filter
+            self._line_edit.selectAll()
             self._show_unfiltered()
 
     def _on_text_changed(self, text: str):
@@ -151,7 +153,16 @@ class SearchableChatSelector(QWidget):
 
     def _show_unfiltered(self):
         """Show all chats without filtering"""
+        if not self._display_names:
+            return
         self._completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self._completer.setCompletionPrefix("")
+        # Use timer to ensure widget is ready
+        QTimer.singleShot(0, self._do_complete)
+
+    def _do_complete(self):
+        """Actually show the completer popup"""
+        self._line_edit.setFocus()
         self._completer.complete()
 
     def setChats(self, chats: List[ChatInfo]):
