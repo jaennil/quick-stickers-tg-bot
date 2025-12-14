@@ -78,7 +78,8 @@ func CancelButton(userID int64) []models.InlineKeyboardButton {
 
 func EditStickerButton(stickerID string) []models.InlineKeyboardButton {
 	return []models.InlineKeyboardButton{
-		{Text: "✏️ Изменить текст", CallbackData: "edit:" + stickerID},
+		{Text: "✏️ Изменить", CallbackData: "edit:" + stickerID},
+		{Text: "🗑 Удалить", CallbackData: "delete:" + stickerID},
 	}
 }
 

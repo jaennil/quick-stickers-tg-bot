@@ -20,6 +20,7 @@ type Repository interface {
 	GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error)
 	GetStickersBySetName(userID int64, setName string) (map[string]*Sticker, error)
 	UpdateStickerText(userID int64, stickerID string, text string) error
+	DeleteSticker(userID int64, stickerID string) error
 
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error

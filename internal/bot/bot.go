@@ -44,6 +44,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler("selectocr:", bot.MatchTypePrefix, b.handleSelectOCRCallback),
 		bot.WithCallbackQueryDataHandler("list:", bot.MatchTypePrefix, b.handleListCallback),
 		bot.WithCallbackQueryDataHandler("fallback:", bot.MatchTypePrefix, b.handleFallbackCallback),
+		bot.WithCallbackQueryDataHandler("delete:", bot.MatchTypePrefix, b.handleDeleteCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)
@@ -407,6 +408,37 @@ func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "Введи правильный текст для этого стикера:",
+	})
+}
+
+func (b *Bot) handleDeleteCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	stickerID := strings.TrimPrefix(update.CallbackQuery.Data, "delete:")
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+	messageID := update.CallbackQuery.Message.Message.ID
+	logger.Log.Infow("[CALLBACK] delete", "sticker", stickerID, "user", userID)
+
+	if err := b.repo.DeleteSticker(userID, stickerID); err != nil {
+		logger.Log.Errorw("[CALLBACK] delete error", "sticker", stickerID, "user", userID, "error", err)
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка при удалении",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	logger.Log.Infow("[CALLBACK] delete success", "sticker", stickerID, "user", userID)
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+		Text:            "Стикер удалён",
+	})
+
+	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      "🗑 Стикер удалён",
 	})
 }
 

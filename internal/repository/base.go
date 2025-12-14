@@ -151,6 +151,12 @@ func (r *BaseRepository) UpdateStickerText(userID int64, stickerID string, text 
 	return err
 }
 
+func (r *BaseRepository) DeleteSticker(userID int64, stickerID string) error {
+	query := r.db.Rebind("DELETE FROM stickers WHERE user_id = ? AND sticker_id = ?")
+	_, err := r.db.Exec(query, userID, stickerID)
+	return err
+}
+
 func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
 	query := r.db.Rebind(`
 		INSERT INTO sticker_thumbnails (file_id, thumbnail) VALUES (?, ?)
