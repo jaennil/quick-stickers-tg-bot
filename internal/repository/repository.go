@@ -32,6 +32,8 @@ type Repository interface {
 	UpdateStickerText(userID int64, stickerID string, text string) error
 	DeleteSticker(userID int64, stickerID string) error
 	GetUserPackStats(userID int64) ([]*PackStats, error)
+	GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error)
+	GetUserPackStickerCount(userID int64, setName string) (int, error)
 
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error

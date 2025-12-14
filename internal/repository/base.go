@@ -189,6 +189,37 @@ func (r *BaseRepository) GetUserPackStats(userID int64) ([]*PackStats, error) {
 	return stats, rows.Err()
 }
 
+func (r *BaseRepository) GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		FROM stickers
+		WHERE user_id = ? AND set_name = ?
+		ORDER BY id DESC
+		LIMIT ? OFFSET ?
+	`)
+	rows, err := r.db.Query(query, userID, setName, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stickers []*Sticker
+	for rows.Next() {
+		var st Sticker
+		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
+			return nil, err
+		}
+		stickers = append(stickers, &st)
+	}
+	return stickers, rows.Err()
+}
+
+func (r *BaseRepository) GetUserPackStickerCount(userID int64, setName string) (int, error) {
+	var count int
+	err := r.db.Get(&count, r.db.Rebind("SELECT COUNT(*) FROM stickers WHERE user_id = ? AND set_name = ?"), userID, setName)
+	return count, err
+}
+
 func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
 	query := r.db.Rebind(`
 		INSERT INTO sticker_thumbnails (file_id, thumbnail) VALUES (?, ?)
