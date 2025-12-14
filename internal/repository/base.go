@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"database/sql"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
+
+const stickerSelectFields = "id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit"
 
 type BaseRepository struct {
 	db *sqlx.DB
@@ -14,6 +17,27 @@ func NewBase(db *sqlx.DB) *BaseRepository {
 	r := &BaseRepository{db: db}
 	r.updateTextLower()
 	return r
+}
+
+func scanSticker(rows *sql.Rows) (*Sticker, error) {
+	var st Sticker
+	err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func scanStickers(rows *sql.Rows) ([]*Sticker, error) {
+	var stickers []*Sticker
+	for rows.Next() {
+		st, err := scanSticker(rows)
+		if err != nil {
+			return nil, err
+		}
+		stickers = append(stickers, st)
+	}
+	return stickers, rows.Err()
 }
 
 func (r *BaseRepository) updateTextLower() {
@@ -68,7 +92,7 @@ func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, error) {
 	queryLower := strings.ToLower(query)
 	sqlQuery := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		SELECT ` + stickerSelectFields + `
 		FROM stickers
 		WHERE user_id = ? AND text_lower LIKE ?
 		LIMIT 50
@@ -79,15 +103,7 @@ func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, e
 	}
 	defer rows.Close()
 
-	var stickers []*Sticker
-	for rows.Next() {
-		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
-			return nil, err
-		}
-		stickers = append(stickers, &st)
-	}
-	return stickers, rows.Err()
+	return scanStickers(rows)
 }
 
 func (r *BaseRepository) GetUserStickerCount(userID int64) (int, error) {
@@ -98,7 +114,7 @@ func (r *BaseRepository) GetUserStickerCount(userID int64) (int, error) {
 
 func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error) {
 	query := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		SELECT ` + stickerSelectFields + `
 		FROM stickers
 		WHERE user_id = ?
 		ORDER BY id DESC
@@ -110,20 +126,12 @@ func (r *BaseRepository) GetUserStickers(userID int64, limit, offset int) ([]*St
 	}
 	defer rows.Close()
 
-	var stickers []*Sticker
-	for rows.Next() {
-		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
-			return nil, err
-		}
-		stickers = append(stickers, &st)
-	}
-	return stickers, rows.Err()
+	return scanStickers(rows)
 }
 
 func (r *BaseRepository) GetStickersBySetName(userID int64, setName string) (map[string]*Sticker, error) {
 	query := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		SELECT ` + stickerSelectFields + `
 		FROM stickers
 		WHERE user_id = ? AND set_name = ?
 	`)
@@ -135,11 +143,11 @@ func (r *BaseRepository) GetStickersBySetName(userID int64, setName string) (map
 
 	stickers := make(map[string]*Sticker)
 	for rows.Next() {
-		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
+		st, err := scanSticker(rows)
+		if err != nil {
 			return nil, err
 		}
-		stickers[st.StickerID] = &st
+		stickers[st.StickerID] = st
 	}
 	return stickers, rows.Err()
 }
@@ -191,7 +199,7 @@ func (r *BaseRepository) GetUserPackStats(userID int64) ([]*PackStats, error) {
 
 func (r *BaseRepository) GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error) {
 	query := r.db.Rebind(`
-		SELECT id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit
+		SELECT ` + stickerSelectFields + `
 		FROM stickers
 		WHERE user_id = ? AND set_name = ?
 		ORDER BY id DESC
@@ -203,15 +211,7 @@ func (r *BaseRepository) GetUserStickersByPack(userID int64, setName string, lim
 	}
 	defer rows.Close()
 
-	var stickers []*Sticker
-	for rows.Next() {
-		var st Sticker
-		if err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit); err != nil {
-			return nil, err
-		}
-		stickers = append(stickers, &st)
-	}
-	return stickers, rows.Err()
+	return scanStickers(rows)
 }
 
 func (r *BaseRepository) GetUserPackStickerCount(userID int64, setName string) (int, error) {

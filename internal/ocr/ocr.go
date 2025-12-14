@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"golang.org/x/net/proxy"
 )
@@ -36,7 +37,7 @@ type OCR struct {
 
 func New(apiKeys []string, serverURL string, proxyURL string) *OCR {
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: constants.HTTPTimeout,
 	}
 
 	// Configure proxy if provided
@@ -144,7 +145,7 @@ func (o *OCR) recognizeViaLocalServer(ctx context.Context, imagePath string, eng
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: constants.HTTPTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
