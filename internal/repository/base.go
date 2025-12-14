@@ -36,7 +36,7 @@ func (r *BaseRepository) GetUserOCREngine(userID int64) string {
 	var engine string
 	err := r.db.Get(&engine, r.db.Rebind("SELECT ocr_engine FROM user_settings WHERE user_id = ?"), userID)
 	if err != nil {
-		return "paddle"
+		return "api"
 	}
 	return engine
 }

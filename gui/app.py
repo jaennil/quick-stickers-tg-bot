@@ -302,19 +302,10 @@ class StickerSearchApp(QWidget):
         def on_activate():
             self.signal_bridge.show_window.emit()
 
-        hotkey = keyboard.HotKey(
-            keyboard.HotKey.parse(hotkey_str),
-            on_activate
-        )
-
-        def for_canonical(f):
-            return lambda k: f(self.listener.canonical(k))
-
-        self.listener = keyboard.Listener(
-            on_press=for_canonical(hotkey.press),
-            on_release=for_canonical(hotkey.release)
-        )
-        self.listener.start()
+        self.hotkey_listener = keyboard.GlobalHotKeys({
+            hotkey_str: on_activate
+        })
+        self.hotkey_listener.start()
 
     def _detect_telegram_chat(self) -> Optional[str]:
         """Detect current chat from Telegram window title"""

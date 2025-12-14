@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jaennil/sticker-search-bot/internal/logger"
 )
 
 type OCR struct {
@@ -140,6 +142,10 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 		return "", fmt.Errorf("no OCR.space API keys configured")
 	}
 
+	// Маскируем ключ для логов
+	maskedKey := apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+	logger.Log.Debugw("[OCR] using ocr.space API", "key", maskedKey)
+
 	// Читаем файл
 	file, err := os.Open(imagePath)
 	if err != nil {
@@ -175,9 +181,11 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
+	start := time.Now()
 	// Отправляем
 	resp, err := o.client.Do(req)
 	if err != nil {
+		logger.Log.Errorw("[OCR] ocr.space request failed", "key", maskedKey, "error", err)
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -189,10 +197,12 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 
 	var result ocrSpaceResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Log.Errorw("[OCR] ocr.space invalid response", "key", maskedKey, "response", string(respBody[:min(len(respBody), 200)]))
 		return "", fmt.Errorf("json parse error: %v, response: %s", err, string(respBody[:min(len(respBody), 500)]))
 	}
 
 	if result.IsErroredOnProcessing {
+		logger.Log.Warnw("[OCR] ocr.space error", "key", maskedKey, "error", result.ErrorMessage)
 		return "", fmt.Errorf("ocr error: %s", result.ErrorMessage)
 	}
 
@@ -204,7 +214,10 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 		}
 	}
 
-	return cleanText(strings.Join(texts, " ")), nil
+	text := cleanText(strings.Join(texts, " "))
+	logger.Log.Debugw("[OCR] ocr.space success", "key", maskedKey, "duration", time.Since(start), "text_len", len(text))
+
+	return text, nil
 }
 
 func cleanText(text string) string {

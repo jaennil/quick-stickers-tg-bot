@@ -15,6 +15,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/constants"
+	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 )
@@ -49,6 +50,14 @@ func (i *Indexer) IndexPack(
 	total := len(stickerSet.Stickers)
 	setName := stickerSet.Name
 
+	logger.Log.Infow("[INDEX] starting pack indexing",
+		"pack", setName,
+		"total", total,
+		"engine", ocrEngine,
+		"workers", constants.Workers,
+		"user", userID,
+	)
+
 	var processed atomic.Int64
 	var withText atomic.Int64
 	var completed atomic.Int64
@@ -62,24 +71,39 @@ func (i *Indexer) IndexPack(
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			time.Sleep(time.Duration(workerID*100) * time.Millisecond)
+			time.Sleep(time.Duration(workerID*50) * time.Millisecond)
+			logger.Log.Debugw("[INDEX] worker started", "worker", workerID)
 
 			for sticker := range jobs {
 				select {
 				case <-ctx.Done():
 					cancelled.Store(true)
+					logger.Log.Warnw("[INDEX] worker cancelled", "worker", workerID)
 					return
 				default:
 				}
 
 				file, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.FileID})
 				if err != nil {
+					logger.Log.Errorw("[INDEX] failed to get file",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+						"error", err,
+					)
 					completed.Add(1)
 					continue
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
-				text, _ := i.DownloadAndOCR(ctx, fileURL, ocrEngine)
+				text, ocrErr := i.DownloadAndOCR(ctx, fileURL, ocrEngine)
+
+				if ocrErr != nil {
+					logger.Log.Warnw("[INDEX] OCR failed",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+						"error", ocrErr,
+					)
+				}
 
 				s := &repository.Sticker{
 					UserID:    userID,
@@ -90,10 +114,28 @@ func (i *Indexer) IndexPack(
 					Emoji:     sticker.Emoji,
 				}
 
-				if err := i.repo.SaveSticker(s); err == nil {
+				if err := i.repo.SaveSticker(s); err != nil {
+					logger.Log.Errorw("[INDEX] failed to save sticker",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+						"error", err,
+					)
+				} else {
 					processed.Add(1)
 					if text != "" {
 						withText.Add(1)
+						logger.Log.Infow("[INDEX] sticker processed",
+							"worker", workerID,
+							"sticker", sticker.FileUniqueID,
+							"text", text,
+							"emoji", sticker.Emoji,
+						)
+					} else {
+						logger.Log.Debugw("[INDEX] sticker processed (no text)",
+							"worker", workerID,
+							"sticker", sticker.FileUniqueID,
+							"emoji", sticker.Emoji,
+						)
 					}
 				}
 				completed.Add(1)
@@ -146,13 +188,24 @@ func (i *Indexer) IndexPack(
 
 	wg.Wait()
 
-	return IndexProgress{
+	result := IndexProgress{
 		Current:   completed.Load(),
 		Total:     total,
 		Processed: processed.Load(),
 		WithText:  withText.Load(),
 		Cancelled: cancelled.Load(),
 	}
+
+	logger.Log.Infow("[INDEX] pack indexing completed",
+		"pack", setName,
+		"total", total,
+		"processed", result.Processed,
+		"with_text", result.WithText,
+		"cancelled", result.Cancelled,
+		"user", userID,
+	)
+
+	return result
 }
 
 func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string, engine string) (string, error) {
