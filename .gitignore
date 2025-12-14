@@ -1,5 +1,8 @@
 # Environment
 .env
+.venv/
+scripts/
+*.py
 
 # Database
 *.db

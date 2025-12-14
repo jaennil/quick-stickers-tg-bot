@@ -3,29 +3,45 @@ package ocr
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
-type OCR struct{}
-
-func New() *OCR {
-	return &OCR{}
+type OCR struct {
+	apiKey string
+	client *http.Client
 }
 
-// RecognizeText распознает текст на изображении через Tesseract
+func New() *OCR {
+	apiKey := os.Getenv("OCR_API_KEY")
+	if apiKey == "" {
+		apiKey = "helloworld" // тестовый ключ (лимитированный)
+	}
+	return &OCR{
+		apiKey: apiKey,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+type ocrSpaceResponse struct {
+	ParsedResults []struct {
+		ParsedText string `json:"ParsedText"`
+	} `json:"ParsedResults"`
+	IsErroredOnProcessing bool   `json:"IsErroredOnProcessing"`
+	ErrorMessage          string `json:"ErrorMessage,omitempty"`
+}
+
+// RecognizeText распознает текст на изображении через ocr.space API
 func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, error) {
-	// Предобработка изображения для лучшего распознавания
-	processedPath := imagePath + "_processed.png"
-	defer os.Remove(processedPath)
-
-	if err := preprocessImage(ctx, imagePath, processedPath); err != nil {
-		// Если предобработка не удалась, пробуем с оригиналом
-		processedPath = imagePath
-	}
-
 	// Проверяем отмену
 	select {
 	case <-ctx.Done():
@@ -33,78 +49,71 @@ func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, erro
 	default:
 	}
 
-	// Пробуем сначала только русский (меньше путаницы с латиницей)
-	results := []string{}
+	// Читаем файл
+	file, err := os.Open(imagePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
 
-	// PSM 6 - единый блок текста, только русский
-	if text := runTesseractLang(ctx, processedPath, "6", "rus"); text != "" {
-		results = append(results, text)
+	// Создаём multipart форму
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Добавляем файл
+	part, err := writer.CreateFormFile("file", "image.png")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return "", err
 	}
 
-	// Проверяем отмену
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
+	// Добавляем параметры
+	writer.WriteField("apikey", o.apiKey)
+	writer.WriteField("language", "rus")      // русский + английский
+	writer.WriteField("isOverlayRequired", "false")
+	writer.WriteField("OCREngine", "2")       // Engine 2 лучше для сложных изображений
+
+	writer.Close()
+
+	// Создаём запрос
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.ocr.space/parse/image", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Отправляем
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
 	}
 
-	// PSM 11 - разреженный текст, только русский
-	if text := runTesseractLang(ctx, processedPath, "11", "rus"); text != "" {
-		results = append(results, text)
+	var result ocrSpaceResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", err
 	}
 
-	// Проверяем отмену
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
+	if result.IsErroredOnProcessing {
+		return "", fmt.Errorf("ocr error: %s", result.ErrorMessage)
 	}
 
-	// PSM 6 - с русским и английским (для смешанного текста)
-	if text := runTesseractLang(ctx, processedPath, "6", "rus+eng"); text != "" {
-		results = append(results, text)
-	}
-
-	// Выбираем лучший результат (самый длинный осмысленный)
-	bestResult := ""
-	for _, r := range results {
-		cleaned := cleanText(r)
-		if len(cleaned) > len(bestResult) {
-			bestResult = cleaned
+	// Собираем текст из всех результатов
+	var texts []string
+	for _, r := range result.ParsedResults {
+		if r.ParsedText != "" {
+			texts = append(texts, r.ParsedText)
 		}
 	}
 
-	return bestResult, nil
-}
-
-func runTesseractLang(ctx context.Context, imagePath, psm, lang string) string {
-	cmd := exec.CommandContext(ctx, "tesseract", imagePath, "stdout",
-		"-l", lang,
-		"--psm", psm,
-		"--oem", "3",
-	)
-
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-
-	return stdout.String()
-}
-
-func preprocessImage(ctx context.Context, src, dst string) error {
-	// ImageMagick: увеличиваем, убираем фон, бинаризация
-	cmd := exec.CommandContext(ctx, "convert", src,
-		"-resize", "300%",              // Увеличиваем
-		"-colorspace", "gray",          // Градации серого
-		"-normalize",                   // Нормализация яркости
-		"-threshold", "50%",            // Бинаризация (чёрно-белое)
-		"-morphology", "Close", "Square:1", // Убираем шум
-		dst,
-	)
-	return cmd.Run()
+	return cleanText(strings.Join(texts, " ")), nil
 }
 
 func cleanText(text string) string {
@@ -119,15 +128,10 @@ func cleanText(text string) string {
 	spaceRegex := regexp.MustCompile(`\s+`)
 	text = spaceRegex.ReplaceAllString(text, " ")
 
-	// Убираем мусорные символы (оставляем буквы, цифры, базовую пунктуацию)
-	cleanRegex := regexp.MustCompile(`[^a-zA-Zа-яА-ЯёЁ0-9\s\-.,!?]`)
-	text = cleanRegex.ReplaceAllString(text, "")
-
 	return strings.TrimSpace(text)
 }
 
-// IsAvailable проверяет доступен ли Tesseract
+// IsAvailable проверяет доступен ли OCR API
 func (o *OCR) IsAvailable() bool {
-	cmd := exec.Command("tesseract", "--version")
-	return cmd.Run() == nil
+	return o.apiKey != ""
 }

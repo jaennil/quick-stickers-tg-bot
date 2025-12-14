@@ -75,7 +75,7 @@ func (s *Storage) SearchByText(userID int64, query string) ([]*Sticker, error) {
 	sqlQuery := `
 	SELECT id, user_id, sticker_id, set_name, file_id, text, emoji
 	FROM stickers
-	WHERE user_id = ? AND text LIKE ?
+	WHERE user_id = ? AND LOWER(text) LIKE LOWER(?)
 	LIMIT 50
 	`
 	rows, err := s.db.Query(sqlQuery, userID, "%"+query+"%")
