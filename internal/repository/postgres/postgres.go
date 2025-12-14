@@ -2,17 +2,14 @@ package postgres
 
 import (
 	"database/sql"
-	"embed"
 	"fmt"
 	"strings"
 
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/repository/migrations"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
-
-//go:embed migrations/*.sql
-var embedMigrations embed.FS
 
 type Repository struct {
 	db *sql.DB
@@ -28,11 +25,11 @@ func New(dsn string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	goose.SetBaseFS(embedMigrations)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return nil, fmt.Errorf("failed to set dialect: %w", err)
 	}
-	if err := goose.Up(db, "migrations"); err != nil {
+	migrations.Register("postgres")
+	if err := goose.Up(db, "."); err != nil {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
