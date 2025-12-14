@@ -7,12 +7,11 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-func init() {
+func Register() {
 	goose.AddMigrationContext(upAddTextLower, downAddTextLower)
 }
 
 func upAddTextLower(ctx context.Context, tx *sql.Tx) error {
-	// Check if column exists
 	var hasColumn bool
 	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(stickers)")
 	if err != nil {

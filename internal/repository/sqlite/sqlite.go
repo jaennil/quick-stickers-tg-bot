@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/jaennil/sticker-search-bot/internal/repository"
-	_ "github.com/jaennil/sticker-search-bot/internal/repository/sqlite/migrations"
+	"github.com/jaennil/sticker-search-bot/internal/repository/sqlite/migrations"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )
@@ -33,6 +33,7 @@ func New(dbPath string) (*Repository, error) {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return nil, fmt.Errorf("failed to set dialect: %w", err)
 	}
+	migrations.Register()
 	if err := goose.Up(db, "migrations"); err != nil {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
