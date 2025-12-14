@@ -477,11 +477,11 @@ func (i *Indexer) downloadAndSaveThumbnail(ctx context.Context, fileID, fileURL 
 	}
 	tmpFile.Close()
 
-	// Resize to 200x200 PNG
+	// Convert to PNG (keep original size for quality)
 	pngPath := strings.TrimSuffix(tmpFile.Name(), filepath.Ext(tmpFile.Name())) + ".png"
 	defer os.Remove(pngPath)
 
-	cmd := exec.CommandContext(ctx, "convert", tmpFile.Name(), "-resize", "200x200", pngPath)
+	cmd := exec.CommandContext(ctx, "convert", tmpFile.Name(), pngPath)
 	if err := cmd.Run(); err != nil {
 		return err
 	}
