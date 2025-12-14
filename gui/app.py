@@ -102,10 +102,12 @@ class SearchableChatSelector(QWidget):
         self._chats: List[ChatInfo] = []
         self._chat_map: Dict[str, ChatInfo] = {}  # display_text -> ChatInfo
         self._selected_chat: Optional[ChatInfo] = None
+        self._display_names: List[str] = []
 
         # Create line edit
         self._line_edit = QLineEdit()
         self._line_edit.setPlaceholderText("Search chats...")
+        self._line_edit.textChanged.connect(self._on_text_changed)
 
         # Create completer
         self._model = QStringListModel()
@@ -124,19 +126,25 @@ class SearchableChatSelector(QWidget):
         layout.addWidget(self._line_edit)
         self.setLayout(layout)
 
+    def _on_text_changed(self, text: str):
+        """Show all chats when text is empty"""
+        if not text and self._display_names:
+            self._completer.setCompletionPrefix("")
+            self._completer.complete()
+
     def setChats(self, chats: List[ChatInfo]):
-        """Set the list of chats"""
+        """Set the list of chats (already sorted by recent activity from Telegram)"""
         self._chats = chats
         self._chat_map.clear()
+        self._display_names = []
 
-        display_names = []
         for chat in chats:
             icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
             display_name = f"{icon} {chat.name}"
-            display_names.append(display_name)
+            self._display_names.append(display_name)
             self._chat_map[display_name] = chat
 
-        self._model.setStringList(display_names)
+        self._model.setStringList(self._display_names)
 
     def _on_completer_activated(self, text: str):
         """Handle selection from completer"""
