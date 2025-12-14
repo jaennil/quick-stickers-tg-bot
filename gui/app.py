@@ -90,6 +90,79 @@ class SmoothScrollListWidget(QListWidget):
         event.accept()
 
 
+class SearchableComboBox(QComboBox):
+    """QComboBox with search/filter functionality"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+        # Store original items for filtering
+        self._all_items: List[tuple] = []  # (display_text, data)
+
+        # Setup completer for filtering
+        self.lineEdit().textEdited.connect(self._filter_items)
+
+        # Clear filter when dropdown is shown
+        self.lineEdit().editingFinished.connect(self._restore_selection)
+
+    def addItemWithData(self, text: str, data):
+        """Add item and store for filtering"""
+        self._all_items.append((text, data))
+        super().addItem(text, data)
+
+    def clearItems(self):
+        """Clear all items"""
+        self._all_items.clear()
+        self.clear()
+
+    def _filter_items(self, text: str):
+        """Filter items based on search text"""
+        # Block signals to prevent index change events during filtering
+        self.blockSignals(True)
+
+        # Remember current selection
+        current_data = self.currentData()
+
+        # Clear and repopulate
+        self.clear()
+
+        filter_text = text.lower()
+        matched_index = -1
+
+        for i, (item_text, item_data) in enumerate(self._all_items):
+            if not filter_text or filter_text in item_text.lower():
+                self.addItem(item_text, item_data)
+                if item_data and current_data and hasattr(item_data, 'id') and hasattr(current_data, 'id'):
+                    if item_data.id == current_data.id:
+                        matched_index = self.count() - 1
+
+        # Restore selection if found
+        if matched_index >= 0:
+            self.setCurrentIndex(matched_index)
+
+        self.blockSignals(False)
+
+        # Show dropdown with filtered results
+        if filter_text and self.count() > 0:
+            self.showPopup()
+
+    def _restore_selection(self):
+        """Restore display text to selected item"""
+        if self.currentIndex() >= 0:
+            self.lineEdit().setText(self.currentText())
+
+    def setCurrentByData(self, data):
+        """Set current item by data object"""
+        for i in range(self.count()):
+            item_data = self.itemData(i)
+            if item_data and data and hasattr(item_data, 'id') and hasattr(data, 'id'):
+                if item_data.id == data.id:
+                    self.setCurrentIndex(i)
+                    return
+
+
 class SignalBridge(QObject):
     show_window = pyqtSignal()
     chats_loaded = pyqtSignal(list)
@@ -141,12 +214,13 @@ class StickerSearchApp(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        # Chat selector
+        # Chat selector with search
         chat_layout = QHBoxLayout()
         chat_label = QLabel("Chat:")
         chat_label.setFixedWidth(40)
-        self.chat_combo = QComboBox()
+        self.chat_combo = SearchableComboBox()
         self.chat_combo.setMinimumWidth(350)
+        self.chat_combo.lineEdit().setPlaceholderText("Search chats...")
         self.chat_combo.currentIndexChanged.connect(self.on_chat_changed)
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setFixedWidth(30)
@@ -404,18 +478,18 @@ class StickerSearchApp(QWidget):
     def _on_chats_loaded(self, chats: List[ChatInfo]):
         """Handle chats loaded signal"""
         self.chats = chats
-        self.chat_combo.clear()
-        self.chat_combo.addItem("Select chat...", None)
+        self.chat_combo.clearItems()
 
-        saved_index = 0
-        for i, chat in enumerate(chats):
+        saved_chat = None
+        for chat in chats:
             icon = {"private": "👤", "group": "👥", "supergroup": "👥", "channel": "📢"}.get(chat.type, "💬")
-            self.chat_combo.addItem(f"{icon} {chat.name}", chat)
+            self.chat_combo.addItemWithData(f"{icon} {chat.name}", chat)
             if self._saved_chat_id and chat.id == self._saved_chat_id:
-                saved_index = i + 1
+                saved_chat = chat
 
-        if saved_index > 0:
-            self.chat_combo.setCurrentIndex(saved_index)
+        if saved_chat:
+            self.chat_combo.setCurrentByData(saved_chat)
+            self.selected_chat = saved_chat
 
         self.status_label.setText("Ready • Ctrl+Shift+S to toggle")
 
@@ -471,9 +545,9 @@ class StickerSearchApp(QWidget):
             return
 
         chat_name_lower = chat_name.lower()
-        for i, chat in enumerate(self.chats):
+        for chat in self.chats:
             if chat.name.lower() == chat_name_lower:
-                self.chat_combo.setCurrentIndex(i + 1)  # +1 for "Select chat..." item
+                self.chat_combo.setCurrentByData(chat)
                 return
 
     def _show_window(self):
