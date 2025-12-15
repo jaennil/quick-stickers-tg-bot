@@ -6,6 +6,7 @@ type Sticker struct {
 	StickerID  string
 	SetName    string
 	FileID     string
+	DocumentID int64
 	Text       string
 	Emoji      string
 	OCREngine  string

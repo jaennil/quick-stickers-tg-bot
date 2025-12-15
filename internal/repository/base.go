@@ -7,7 +7,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-const stickerSelectFields = "id, user_id, sticker_id, set_name, file_id, text, emoji, ocr_engine, manual_edit"
+const stickerSelectFields = "id, user_id, sticker_id, set_name, file_id, document_id, text, emoji, ocr_engine, manual_edit"
 
 type BaseRepository struct {
 	db *sqlx.DB
@@ -21,7 +21,7 @@ func NewBase(db *sqlx.DB) *BaseRepository {
 
 func scanSticker(rows *sql.Rows) (*Sticker, error) {
 	var st Sticker
-	err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit)
+	err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit)
 	if err != nil {
 		return nil, err
 	}
@@ -77,15 +77,16 @@ func (r *BaseRepository) SetUserOCREngine(userID int64, engine string) error {
 func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 	textLower := strings.ToLower(sticker.Text)
 	query := r.db.Rebind(`
-		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, text, text_lower, emoji, ocr_engine)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, document_id, text, text_lower, emoji, ocr_engine)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, sticker_id) DO UPDATE SET
 			text = EXCLUDED.text,
 			text_lower = EXCLUDED.text_lower,
 			emoji = EXCLUDED.emoji,
-			ocr_engine = EXCLUDED.ocr_engine
+			ocr_engine = EXCLUDED.ocr_engine,
+			document_id = EXCLUDED.document_id
 	`)
-	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.Text, textLower, sticker.Emoji, sticker.OCREngine)
+	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.DocumentID, sticker.Text, textLower, sticker.Emoji, sticker.OCREngine)
 	return err
 }
 

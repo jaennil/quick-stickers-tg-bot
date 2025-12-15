@@ -14,6 +14,7 @@ func Register(d string) {
 	goose.AddNamedMigrationContext("001_init.go", upInit, downInit)
 	goose.AddNamedMigrationContext("002_thumbnails.go", upThumbnails, downThumbnails)
 	goose.AddNamedMigrationContext("003_ocr_tracking.go", upOCRTracking, downOCRTracking)
+	goose.AddNamedMigrationContext("004_document_id.go", upDocumentID, downDocumentID)
 }
 
 func upInit(ctx context.Context, tx *sql.Tx) error {
