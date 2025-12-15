@@ -184,6 +184,8 @@ class SearchableChatSelector(QWidget):
         chat = self._chat_map.get(text)
         if chat:
             self._selected_chat = chat
+            # Hide the popup after selection
+            self._completer.popup().hide()
             self.chatSelected.emit(chat)
 
     def selectedChat(self) -> Optional[ChatInfo]:
@@ -540,6 +542,8 @@ class StickerSearchApp(QWidget):
         if chat:
             self.selected_chat = chat
             self.save_state()
+            # Focus on sticker search after selecting chat
+            self.search_input.setFocus()
 
     def start_hotkey_listener(self):
         hotkey_str = self.config.get('hotkey', '<ctrl>+<shift>+s')
