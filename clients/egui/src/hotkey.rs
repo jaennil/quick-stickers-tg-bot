@@ -1,6 +1,7 @@
 use rdev::{listen, Event, EventType, Key};
 use std::sync::mpsc::Sender;
 use std::thread;
+use tracing::info;
 
 pub enum HotkeyEvent {
     Toggle,
@@ -21,13 +22,15 @@ impl HotkeyListener {
 
     pub fn start(tx: Sender<HotkeyEvent>) {
         thread::spawn(move || {
+            info!("[hotkey] listener thread started");
             let mut listener = HotkeyListener::new();
 
             if let Err(e) = listen(move |event| {
                 listener.handle_event(&event, &tx);
             }) {
-                eprintln!("Hotkey listener error: {:?}", e);
+                tracing::error!("[hotkey] listener error: {:?}", e);
             }
+            info!("[hotkey] listener thread ended");
         });
     }
 
@@ -40,6 +43,7 @@ impl HotkeyListener {
                     Key::KeyS => {
                         // Ctrl+Shift+S
                         if self.ctrl_pressed && self.shift_pressed {
+                            info!("[hotkey] Ctrl+Shift+S detected, sending Toggle");
                             let _ = tx.send(HotkeyEvent::Toggle);
                         }
                     }

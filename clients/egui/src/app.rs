@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -84,6 +85,9 @@ pub struct StickerApp {
 
     // Window visibility
     visible: bool,
+
+    // Chat auto-update
+    last_chat_check: Instant,
 }
 
 impl StickerApp {
@@ -133,6 +137,7 @@ impl StickerApp {
             cache,
             hotkey_rx,
             visible: true,
+            last_chat_check: Instant::now(),
         }
     }
 
@@ -249,6 +254,19 @@ impl eframe::App for StickerApp {
                     self.visible = !self.visible;
                     if self.visible {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+            }
+        }
+
+        // Periodically check for active Telegram chat (every 500ms)
+        if self.last_chat_check.elapsed() > Duration::from_millis(500) {
+            self.last_chat_check = Instant::now();
+            if let Some(active_name) = get_telegram_active_chat() {
+                if self.selected_chat.as_ref().map(|c| &c.name) != Some(&active_name) {
+                    if let Some(chat) = self.chats.iter().find(|c| c.name == active_name) {
+                        info!("[app] live update: switching to chat '{}'", active_name);
+                        self.selected_chat = Some(chat.clone());
                     }
                 }
             }
