@@ -1,12 +1,14 @@
 telegram:
-  token: "YOUR_BOT_TOKEN"
+  token: "8158905082:AAEnRNikWoM2W3RyGtwQqD5AfJgEWHmWLgY"
 
 database:
   driver: "postgres"
   dsn: "postgres://sticker:sticker@postgres:5432/sticker?sslmode=disable"
 
 ocr:
-  engine: "paddle"
-  # proxy_url: "socks5://127.0.0.1:2080"  # optional: SOCKS5 or HTTP proxy for ocr.space
+  engine: "api"
+  proxy_url: "socks5://host.docker.internal:2080"  # optional: SOCKS5 or HTTP proxy for ocr.space (use host.docker.internal in Docker)
   space_api_keys:
-    - "YOUR_OCR_SPACE_API_KEY"
+  - "K81763554688957"
+  - "K84899834788957"
+  - "K83802716488957"
