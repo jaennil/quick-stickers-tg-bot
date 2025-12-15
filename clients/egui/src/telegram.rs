@@ -115,6 +115,12 @@ impl TelegramClient {
             });
         }
 
+        // Log first 3 chats for testing dialog order
+        info!("[get_dialogs] first 3 chats:");
+        for (i, chat) in chats.iter().take(3).enumerate() {
+            info!("[get_dialogs]   #{}: {} (id={})", i + 1, chat.name, chat.id);
+        }
+
         Ok(chats)
     }
 

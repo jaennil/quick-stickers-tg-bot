@@ -1,5 +1,6 @@
 use eframe::egui;
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -11,6 +12,53 @@ use crate::db::Database;
 use crate::hotkey::HotkeyEvent;
 use crate::models::{ChatInfo, Sticker};
 use crate::telegram::TelegramClient;
+
+/// Get current open Telegram chat name from window title using xdotool
+fn get_telegram_active_chat() -> Option<String> {
+    // Get all TelegramDesktop window IDs
+    let window_ids = Command::new("xdotool")
+        .args(["search", "--class", "TelegramDesktop"])
+        .output()
+        .ok()?;
+
+    let ids: Vec<&str> = std::str::from_utf8(&window_ids.stdout)
+        .ok()?
+        .lines()
+        .collect();
+
+    // Find window with chat name (not "TelegramDesktop" or "Media viewer")
+    for id in ids {
+        let name_output = Command::new("xdotool")
+            .args(["getwindowname", id])
+            .output()
+            .ok()?;
+
+        let name = std::str::from_utf8(&name_output.stdout)
+            .ok()?
+            .trim()
+            .to_string();
+
+        if name != "TelegramDesktop" && name != "Media viewer" && name != "Telegram Desktop" {
+            // Remove unread count suffix like " – (1)" or " – (99)"
+            let chat_name = if let Some(pos) = name.rfind(" – (") {
+                name[..pos].to_string()
+            } else {
+                name
+            };
+
+            // Remove invisible Unicode characters (LTR/RTL marks etc)
+            let clean_name: String = chat_name
+                .chars()
+                .filter(|c| !c.is_control() && *c != '\u{200e}' && *c != '\u{200f}' && *c != '\u{2068}' && *c != '\u{2069}')
+                .collect();
+
+            info!("[xdotool] detected active chat: {:?}", clean_name);
+            return Some(clean_name);
+        }
+    }
+
+    None
+}
 
 pub struct StickerApp {
     // State
@@ -53,12 +101,27 @@ impl StickerApp {
         visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(30, 30, 30);
         cc.egui_ctx.set_visuals(visuals);
 
+        // Try to auto-select the currently open Telegram chat
+        let selected_chat = if let Some(active_name) = get_telegram_active_chat() {
+            chats.iter().find(|c| c.name == active_name).cloned().or_else(|| {
+                info!("[app] active chat '{}' not found in loaded chats, falling back to first", active_name);
+                chats.first().cloned()
+            })
+        } else {
+            info!("[app] could not detect active Telegram chat, falling back to first");
+            chats.first().cloned()
+        };
+
+        if let Some(ref chat) = selected_chat {
+            info!("[app] selected chat: {} (id={})", chat.name, chat.id);
+        }
+
         Self {
             search_query: String::new(),
             stickers: Vec::new(),
             selected_sticker: 0,
             chats,
-            selected_chat: None,
+            selected_chat,
             chat_filter: String::new(),
             show_chat_dropdown: false,
             status: "Ready - Ctrl+Shift+S to toggle".into(),
