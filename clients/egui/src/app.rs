@@ -278,8 +278,10 @@ impl eframe::App for StickerApp {
         }
 
         if !self.visible {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {

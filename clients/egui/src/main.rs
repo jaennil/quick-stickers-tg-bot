@@ -65,7 +65,7 @@ fn main() -> Result<()> {
     // Start hotkey listener
     println!("[7/7] Starting hotkey listener...");
     let (hotkey_tx, hotkey_rx) = mpsc::channel::<HotkeyEvent>();
-    HotkeyListener::start(hotkey_tx);
+    let _hotkey_listener = HotkeyListener::start(hotkey_tx);
 
     println!("Starting GUI...");
     // Disable IME completely

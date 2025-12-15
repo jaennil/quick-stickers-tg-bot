@@ -1,61 +1,59 @@
-use rdev::{listen, Event, EventType, Key};
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager,
+};
 use std::sync::mpsc::Sender;
-use std::thread;
-use tracing::info;
+use tracing::{info, error};
 
 pub enum HotkeyEvent {
     Toggle,
 }
 
 pub struct HotkeyListener {
-    ctrl_pressed: bool,
-    shift_pressed: bool,
+    _manager: GlobalHotKeyManager,
+    _hotkey_id: u32,
 }
 
 impl HotkeyListener {
-    pub fn new() -> Self {
-        Self {
-            ctrl_pressed: false,
-            shift_pressed: false,
-        }
-    }
+    pub fn start(tx: Sender<HotkeyEvent>) -> Option<Self> {
+        info!("[hotkey] initializing global hotkey manager");
 
-    pub fn start(tx: Sender<HotkeyEvent>) {
-        thread::spawn(move || {
-            info!("[hotkey] listener thread started");
-            let mut listener = HotkeyListener::new();
-
-            if let Err(e) = listen(move |event| {
-                listener.handle_event(&event, &tx);
-            }) {
-                tracing::error!("[hotkey] listener error: {:?}", e);
+        let manager = match GlobalHotKeyManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                error!("[hotkey] failed to create manager: {:?}", e);
+                return None;
             }
-            info!("[hotkey] listener thread ended");
-        });
-    }
+        };
 
-    fn handle_event(&mut self, event: &Event, tx: &Sender<HotkeyEvent>) {
-        match event.event_type {
-            EventType::KeyPress(key) => {
-                match key {
-                    Key::ControlLeft | Key::ControlRight => self.ctrl_pressed = true,
-                    Key::ShiftLeft | Key::ShiftRight => self.shift_pressed = true,
-                    Key::KeyS => {
-                        // Ctrl+Shift+S
-                        if self.ctrl_pressed && self.shift_pressed {
-                            info!("[hotkey] Ctrl+Shift+S detected, sending Toggle");
-                            let _ = tx.send(HotkeyEvent::Toggle);
-                        }
+        // Ctrl+Shift+S
+        let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        let hotkey_id = hotkey.id();
+
+        if let Err(e) = manager.register(hotkey) {
+            error!("[hotkey] failed to register Ctrl+Shift+S: {:?}", e);
+            return None;
+        }
+
+        info!("[hotkey] registered Ctrl+Shift+S (id={})", hotkey_id);
+
+        // Spawn event handler thread
+        std::thread::spawn(move || {
+            info!("[hotkey] event listener thread started");
+            loop {
+                if let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
+                    info!("[hotkey] received event: {:?}", event);
+                    if event.id == hotkey_id && event.state == global_hotkey::HotKeyState::Pressed {
+                        info!("[hotkey] Ctrl+Shift+S pressed, sending Toggle");
+                        let _ = tx.send(HotkeyEvent::Toggle);
                     }
-                    _ => {}
                 }
             }
-            EventType::KeyRelease(key) => match key {
-                Key::ControlLeft | Key::ControlRight => self.ctrl_pressed = false,
-                Key::ShiftLeft | Key::ShiftRight => self.shift_pressed = false,
-                _ => {}
-            },
-            _ => {}
-        }
+        });
+
+        Some(Self {
+            _manager: manager,
+            _hotkey_id: hotkey_id,
+        })
     }
 }
