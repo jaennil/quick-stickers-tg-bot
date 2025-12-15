@@ -7,6 +7,7 @@ database:
 
 ocr:
   engine: "api"
+  server_url: "http://ocr:8765"  # local OCR server URL (use Docker service name in Docker)
   proxy_url: "socks5://host.docker.internal:2080"  # optional: SOCKS5 or HTTP proxy for ocr.space (use host.docker.internal in Docker)
   space_api_keys:
   - "K81763554688957"
