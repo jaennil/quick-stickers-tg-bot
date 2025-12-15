@@ -1,0 +1,5 @@
+/target/
+.thumb_cache/
+*.session
+*.session-journal
+config.yaml
