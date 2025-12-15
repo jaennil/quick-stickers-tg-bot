@@ -167,7 +167,7 @@ func (i *Indexer) IndexPack(
 					return
 				default:
 				}
-				if err := i.downloadAndSaveThumbnail(indexCtx, job.FileID, job.FileURL); err != nil {
+				if err := i.DownloadAndSaveThumbnail(indexCtx, job.FileID, job.FileURL); err != nil {
 					logger.Log.Debugw("[THUMB] failed to save thumbnail",
 						"worker", workerID,
 						"file_id", job.FileID[:20]+"...",
@@ -456,7 +456,7 @@ func (i *Indexer) CompareOCREngines(ctx context.Context, fileURL string) []ocr.C
 	return i.ocr.CompareEngines(ctx, imagePath)
 }
 
-func (i *Indexer) downloadAndSaveThumbnail(ctx context.Context, fileID, fileURL string) error {
+func (i *Indexer) DownloadAndSaveThumbnail(ctx context.Context, fileID, fileURL string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

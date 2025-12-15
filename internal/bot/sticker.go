@@ -12,6 +12,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/state"
+	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
 	"github.com/jaennil/sticker-search-bot/internal/ui"
 )
 
@@ -136,16 +137,27 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	b.state.SetPendingOCR(sticker.FileUniqueID, results)
 	b.state.SetLastSticker(userID, sticker.FileUniqueID)
 
+	// Decode document_id from file_id
+	documentID, _ := fileid.DecodeDocumentID(sticker.FileID)
+
 	// Save sticker without text
 	s := &repository.Sticker{
-		UserID:    userID,
-		StickerID: sticker.FileUniqueID,
-		SetName:   sticker.SetName,
-		FileID:    sticker.FileID,
-		Text:      "",
-		Emoji:     sticker.Emoji,
+		UserID:     userID,
+		StickerID:  sticker.FileUniqueID,
+		SetName:    sticker.SetName,
+		FileID:     sticker.FileID,
+		DocumentID: documentID,
+		Text:       "",
+		Emoji:      sticker.Emoji,
 	}
 	b.repo.SaveSticker(s)
+
+	// Save thumbnail in background
+	go func() {
+		if err := b.indexer.DownloadAndSaveThumbnail(ctx, sticker.FileID, fileURL); err != nil {
+			logger.Log.Debugw("[THUMB] failed to save", "sticker", sticker.FileUniqueID, "error", err)
+		}
+	}()
 
 	// Build results message
 	var msgBuilder strings.Builder
