@@ -112,6 +112,7 @@ class SearchableChatSelector(QWidget):
         self._chat_map: Dict[str, ChatInfo] = {}  # display_text -> ChatInfo
         self._selected_chat: Optional[ChatInfo] = None
         self._display_names: List[str] = []
+        self._block_popup = False  # Block popup after selection
 
         # Create line edit
         self._line_edit = ClickableLineEdit()
@@ -138,6 +139,8 @@ class SearchableChatSelector(QWidget):
 
     def _on_focus(self):
         """Show all chats when the field receives focus"""
+        if self._block_popup:
+            return
         if self._display_names:
             # Select all text so user can easily type to filter
             self._line_edit.selectAll()
@@ -145,6 +148,8 @@ class SearchableChatSelector(QWidget):
 
     def _on_text_changed(self, text: str):
         """Switch between filtered and unfiltered mode"""
+        if self._block_popup:
+            return
         if not text and self._display_names:
             self._show_unfiltered()
         else:
@@ -153,7 +158,7 @@ class SearchableChatSelector(QWidget):
 
     def _show_unfiltered(self):
         """Show all chats without filtering"""
-        if not self._display_names:
+        if not self._display_names or self._block_popup:
             return
         self._completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
         self._completer.setCompletionPrefix("")
@@ -184,9 +189,17 @@ class SearchableChatSelector(QWidget):
         chat = self._chat_map.get(text)
         if chat:
             self._selected_chat = chat
-            # Hide the popup after selection
+            # Block popup from reappearing
+            self._block_popup = True
             self._completer.popup().hide()
+            self._line_edit.clearFocus()
             self.chatSelected.emit(chat)
+            # Unblock after a short delay
+            QTimer.singleShot(100, self._unblock_popup)
+
+    def _unblock_popup(self):
+        """Re-enable popup after selection"""
+        self._block_popup = False
 
     def selectedChat(self) -> Optional[ChatInfo]:
         """Get currently selected chat"""
