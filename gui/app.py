@@ -618,7 +618,7 @@ class StickerSearchApp(QWidget):
         self.search_input.selectAll()
 
     def on_search_changed(self, text: str):
-        if len(text) < 2:
+        if len(text) < 1:
             self.results_list.clear()
             return
 
