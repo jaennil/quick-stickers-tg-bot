@@ -1,6 +1,6 @@
 services:
   bot:
-    build: .
+    build: ./bot
     restart: unless-stopped
     depends_on:
       postgres:
@@ -8,15 +8,13 @@ services:
       ocr:
         condition: service_started
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
+      - ./bot/config.yaml:/app/config.yaml:ro
       - shared_tmp:/tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   ocr:
-    build:
-      context: .
-      dockerfile: Dockerfile.ocr
+    build: ./ocr
     restart: unless-stopped
     volumes:
       - shared_tmp:/tmp

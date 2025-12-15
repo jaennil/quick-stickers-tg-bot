@@ -2,15 +2,18 @@
 .env
 .venv
 .venv/
-config.yaml
+**/config.yaml
 scripts/
-/*.py
-!gui/*.py
 
-# GUI cache
-gui/.thumb_cache/
-gui/.state.json
-gui/sticker_gui.session*
+# Clients - PyQt
+clients/pyqt/.thumb_cache/
+clients/pyqt/.state.json
+clients/pyqt/sticker_gui.session*
+
+# Clients - egui
+clients/egui/target/
+clients/egui/.thumb_cache/
+clients/egui/sticker_gui.session*
 
 # Database
 *.db
