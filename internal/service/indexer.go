@@ -19,6 +19,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
 )
 
 type IndexProgress struct {
@@ -151,7 +152,7 @@ func (i *Indexer) IndexPack(
 	defer cancelIndex()
 
 	jobs := make(chan stickerJob, constants.Workers)
-	thumbJobs := make(chan thumbJob, constants.Workers)
+	thumbJobs := make(chan thumbJob, 1000) // Large buffer to avoid blocking OCR workers
 	var wg sync.WaitGroup
 	var thumbWg sync.WaitGroup
 
@@ -246,14 +247,18 @@ func (i *Indexer) IndexPack(
 					continue
 				}
 
+				// Decode document_id from file_id
+				documentID, _ := fileid.DecodeDocumentID(sticker.FileID)
+
 				s := &repository.Sticker{
-					UserID:    userID,
-					StickerID: sticker.FileUniqueID,
-					SetName:   setName,
-					FileID:    sticker.FileID,
-					Text:      text,
-					Emoji:     sticker.Emoji,
-					OCREngine: "api",
+					UserID:     userID,
+					StickerID:  sticker.FileUniqueID,
+					SetName:    setName,
+					FileID:     sticker.FileID,
+					DocumentID: documentID,
+					Text:       text,
+					Emoji:      sticker.Emoji,
+					OCREngine:  "api",
 				}
 
 				if err := i.repo.SaveSticker(s); err != nil {
@@ -268,12 +273,8 @@ func (i *Indexer) IndexPack(
 					if job.IsReprocess {
 						reprocessed.Add(1)
 					}
-					// Queue thumbnail download (non-blocking)
-					select {
-					case thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL}:
-					default:
-						// Channel full, skip thumbnail
-					}
+					// Queue thumbnail download
+					thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL}
 					logger.Log.Infow("[INDEX] sticker saved",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,
