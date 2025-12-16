@@ -91,6 +91,9 @@ pub struct StickerApp {
 
     // Focus search on next frame
     focus_search: bool,
+
+    // Grid has focus for navigation
+    grid_focused: bool,
 }
 
 impl StickerApp {
@@ -142,6 +145,7 @@ impl StickerApp {
             visible: true,
             last_chat_check: Instant::now(),
             focus_search: true,
+            grid_focused: false,
         }
     }
 
@@ -333,25 +337,63 @@ impl eframe::App for StickerApp {
             if search_response.changed() {
                 info!("searching, query = {:?}", self.search_query);
                 self.search_stickers();
+                self.grid_focused = false;
             }
 
-            // Handle Enter only when search field has focus
-            if search_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            // Tab switches focus between search and grid
+            if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+                if !self.grid_focused && !self.stickers.is_empty() {
+                    info!("[nav] Tab: switching to grid");
+                    self.grid_focused = true;
+                    ctx.memory_mut(|m| m.surrender_focus(search_response.id));
+                } else {
+                    info!("[nav] Tab: switching to search");
+                    self.grid_focused = false;
+                    self.focus_search = true;
+                }
+            }
+
+            // Handle Enter to send sticker
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if !self.stickers.is_empty() {
                     self.send_selected_sticker();
                 }
             }
 
-            // Handle arrow keys for sticker selection (only when search field has focus)
-            if search_response.has_focus() {
-                if ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowRight)) {
-                    if self.selected_sticker < self.stickers.len().saturating_sub(1) {
-                        self.selected_sticker += 1;
+            // Calculate grid columns for navigation
+            let available_width = ui.available_width();
+            let thumb_size = 100.0;
+            let spacing = 8.0;
+            let cols = ((available_width + spacing) / (thumb_size + spacing)).max(1.0) as usize;
+
+            // Handle navigation when grid is focused (vim keys + arrows)
+            if self.grid_focused {
+                let sticker_count = self.stickers.len();
+                if sticker_count > 0 {
+                    // Left: h or ArrowLeft
+                    if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
+                        info!("[nav] left, selected: {} -> {}", self.selected_sticker, self.selected_sticker.saturating_sub(1));
+                        if self.selected_sticker > 0 {
+                            self.selected_sticker -= 1;
+                        }
                     }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowLeft)) {
-                    if self.selected_sticker > 0 {
-                        self.selected_sticker -= 1;
+                    // Right: l or ArrowRight
+                    if ui.input(|i| i.key_pressed(egui::Key::L) || i.key_pressed(egui::Key::ArrowRight)) {
+                        if self.selected_sticker < sticker_count - 1 {
+                            self.selected_sticker += 1;
+                        }
+                    }
+                    // Up: k or ArrowUp
+                    if ui.input(|i| i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::ArrowUp)) {
+                        if self.selected_sticker >= cols {
+                            self.selected_sticker -= cols;
+                        }
+                    }
+                    // Down: j or ArrowDown
+                    if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
+                        if self.selected_sticker + cols < sticker_count {
+                            self.selected_sticker += cols;
+                        }
                     }
                 }
             }
