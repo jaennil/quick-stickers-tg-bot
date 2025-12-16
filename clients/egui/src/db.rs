@@ -21,20 +21,33 @@ impl Database {
     }
 
     pub async fn search_stickers(&self, query: &str) -> Result<Vec<Sticker>> {
-        let pattern = format!("%{}%", query);
-
-        let rows = sqlx::query_as::<_, StickerRow>(
-            r#"
-            SELECT sticker_id, file_id, document_id, text, set_name, emoji
-            FROM stickers
-            WHERE user_id = $1 AND text ILIKE $2
-            LIMIT 20
-            "#,
-        )
-        .bind(self.user_id)
-        .bind(&pattern)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = if query.is_empty() {
+            sqlx::query_as::<_, StickerRow>(
+                r#"
+                SELECT sticker_id, file_id, document_id, text, set_name, emoji
+                FROM stickers
+                WHERE user_id = $1
+                LIMIT 50
+                "#,
+            )
+            .bind(self.user_id)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            let pattern = format!("%{}%", query);
+            sqlx::query_as::<_, StickerRow>(
+                r#"
+                SELECT sticker_id, file_id, document_id, text, set_name, emoji
+                FROM stickers
+                WHERE user_id = $1 AND text ILIKE $2
+                LIMIT 50
+                "#,
+            )
+            .bind(self.user_id)
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         Ok(rows
             .into_iter()

@@ -146,11 +146,6 @@ impl StickerApp {
     }
 
     fn search_stickers(&mut self) {
-        if self.search_query.is_empty() {
-            self.stickers.clear();
-            return;
-        }
-
         let db = self.db.clone();
         let query = self.search_query.clone();
 
@@ -329,6 +324,10 @@ impl eframe::App for StickerApp {
             if self.focus_search {
                 search_response.request_focus();
                 self.focus_search = false;
+                // Load all stickers on first open
+                if self.stickers.is_empty() {
+                    self.search_stickers();
+                }
             }
 
             if search_response.changed() {
