@@ -23,10 +23,7 @@ type OCREngine struct {
 }
 
 var OCREngines = []OCREngine{
-	{Name: "api", Label: "OCR.space", Desc: "☁️ Облачный API. Лучшее качество, но 180 запросов/час"},
-	{Name: "paddle", Label: "PaddleOCR", Desc: "🔷 Нейросеть от Baidu. Хорошее качество, работает локально"},
-	{Name: "easy", Label: "EasyOCR", Desc: "🔶 Нейросеть на PyTorch. Хорошо для разных языков"},
-	{Name: "tesseract", Label: "Tesseract", Desc: "📦 Классический OCR от Google. Быстрый, но качество хуже"},
+	{Name: "api", Label: "OCR.space", Desc: "☁️ Облачный API. Лучшее качество"},
 }
 
 func GetEngineLabel(name string) string {

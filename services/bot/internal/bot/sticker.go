@@ -11,6 +11,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/service"
 	"github.com/jaennil/sticker-search-bot/internal/state"
 	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
 	"github.com/jaennil/sticker-search-bot/internal/ui"
@@ -86,7 +87,13 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	sticker := update.Message.Sticker
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
-	logger.Log.Infow("[STICKER] received", "sticker", sticker.FileUniqueID, "set", sticker.SetName, "user", userID)
+	logger.Log.Infow("[STICKER] received",
+		"sticker", sticker.FileUniqueID,
+		"set", sticker.SetName,
+		"user", userID,
+		"is_animated", sticker.IsAnimated,
+		"is_video", sticker.IsVideo,
+	)
 
 	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
@@ -105,6 +112,16 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 
 	fileURL := tgBot.FileDownloadLink(file)
 
+	// Determine sticker type
+	var stickerType service.StickerType
+	if sticker.IsVideo {
+		stickerType = service.StickerTypeVideo
+	} else if sticker.IsAnimated {
+		stickerType = service.StickerTypeAnimated
+	} else {
+		stickerType = service.StickerTypeStatic
+	}
+
 	// Run all OCR engines in parallel
 	results := make(map[string]string)
 	var resultsMu sync.Mutex
@@ -114,7 +131,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		wg.Add(1)
 		go func(engineName string) {
 			defer wg.Done()
-			text, err := b.indexer.DownloadAndOCR(ctx, fileURL, engineName)
+			text, err := b.indexer.DownloadAndOCRWithType(ctx, fileURL, engineName, stickerType)
 			if err != nil {
 				logger.Log.Errorw("OCR error", "engine", engineName, "error", err)
 				text = ""
@@ -149,6 +166,8 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		DocumentID: documentID,
 		Text:       "",
 		Emoji:      sticker.Emoji,
+		IsAnimated: sticker.IsAnimated,
+		IsVideo:    sticker.IsVideo,
 	}
 	b.repo.SaveSticker(s)
 

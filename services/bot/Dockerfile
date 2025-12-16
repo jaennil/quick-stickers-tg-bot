@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -v -o bot ./cmd/bot
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tesseract-ocr tesseract-ocr-data-rus tesseract-ocr-data-eng imagemagick
+RUN apk add --no-cache ca-certificates tesseract-ocr tesseract-ocr-data-rus tesseract-ocr-data-eng imagemagick ffmpeg
 
 WORKDIR /app
 

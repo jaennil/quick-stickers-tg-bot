@@ -213,8 +213,27 @@ func (i *Indexer) IndexPack(
 				}
 
 				fileURL := tgBot.FileDownloadLink(file)
+
+				// Determine sticker type
+				var stickerType StickerType
+				if sticker.IsVideo {
+					stickerType = StickerTypeVideo
+					logger.Log.Debugw("[INDEX] processing video sticker",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+					)
+				} else if sticker.IsAnimated {
+					stickerType = StickerTypeAnimated
+					logger.Log.Debugw("[INDEX] processing animated sticker",
+						"worker", workerID,
+						"sticker", sticker.FileUniqueID,
+					)
+				} else {
+					stickerType = StickerTypeStatic
+				}
+
 				// Always use api engine for reindexing
-				text, ocrErr := i.DownloadAndOCR(indexCtx, fileURL, "api")
+				text, ocrErr := i.DownloadAndOCRWithType(indexCtx, fileURL, "api", stickerType)
 
 				// Check for quota exceeded
 				if errors.Is(ocrErr, ocr.ErrQuotaExceeded) {
@@ -259,6 +278,8 @@ func (i *Indexer) IndexPack(
 					Text:       text,
 					Emoji:      sticker.Emoji,
 					OCREngine:  "api",
+					IsAnimated: sticker.IsAnimated,
+					IsVideo:    sticker.IsVideo,
 				}
 
 				if err := i.repo.SaveSticker(s); err != nil {
@@ -387,7 +408,20 @@ func (i *Indexer) IndexPack(
 	return result
 }
 
+// StickerType represents the type of sticker
+type StickerType int
+
+const (
+	StickerTypeStatic   StickerType = iota // WebP static
+	StickerTypeAnimated                    // TGS (Lottie)
+	StickerTypeVideo                       // WEBM video
+)
+
 func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string, engine string) (string, error) {
+	return i.DownloadAndOCRWithType(ctx, fileURL, engine, StickerTypeStatic)
+}
+
+func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, engine string, stickerType StickerType) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -400,7 +434,18 @@ func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string, engine str
 	}
 	defer resp.Body.Close()
 
-	tmpFile, err := os.CreateTemp("", "sticker-*.webp")
+	// Determine file extension based on sticker type
+	var ext string
+	switch stickerType {
+	case StickerTypeAnimated:
+		ext = ".tgs"
+	case StickerTypeVideo:
+		ext = ".webm"
+	default:
+		ext = ".webp"
+	}
+
+	tmpFile, err := os.CreateTemp("", "sticker-*"+ext)
 	if err != nil {
 		return "", err
 	}
@@ -414,11 +459,73 @@ func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string, engine str
 	pngPath := strings.TrimSuffix(tmpFile.Name(), filepath.Ext(tmpFile.Name())) + ".png"
 	defer os.Remove(pngPath)
 
-	if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
-		return i.ocr.RecognizeText(ctx, tmpFile.Name(), engine)
+	// Convert based on sticker type
+	switch stickerType {
+	case StickerTypeAnimated:
+		// TGS (Lottie) - extract first frame using lottie2gif then convert
+		if err := extractTGSFrame(ctx, tmpFile.Name(), pngPath); err != nil {
+			logger.Log.Warnw("[OCR] TGS frame extraction failed", "error", err)
+			return "", err
+		}
+	case StickerTypeVideo:
+		// WEBM - extract first frame using ffmpeg
+		if err := extractVideoFrame(ctx, tmpFile.Name(), pngPath); err != nil {
+			logger.Log.Warnw("[OCR] WEBM frame extraction failed", "error", err)
+			return "", err
+		}
+	default:
+		// Static WebP - convert to PNG
+		if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
+			return i.ocr.RecognizeText(ctx, tmpFile.Name(), engine)
+		}
 	}
 
 	return i.ocr.RecognizeText(ctx, pngPath, engine)
+}
+
+// extractTGSFrame extracts the first frame from a TGS (Lottie) file
+func extractTGSFrame(ctx context.Context, tgsPath, pngPath string) error {
+	// TGS is gzipped Lottie JSON
+	// Use lottie_convert.py from python-lottie or tgs2png
+	// For now, use tgs2png if available, otherwise try python
+
+	// Try tgs2png first (faster, if available)
+	cmd := exec.CommandContext(ctx, "tgs2png", tgsPath, "-o", pngPath, "-f", "0")
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+
+	// Fallback: use python with lottie
+	gifPath := strings.TrimSuffix(pngPath, ".png") + ".gif"
+	defer os.Remove(gifPath)
+
+	// Convert TGS to GIF using lottie
+	cmd = exec.CommandContext(ctx, "python3", "-c", `
+import gzip
+import json
+import sys
+from lottie.importers.tgs import import_tgs
+from lottie.exporters.gif import export_gif
+
+with gzip.open(sys.argv[1], 'rb') as f:
+    animation = import_tgs(f)
+
+# Export only first frame
+animation.out_point = animation.in_point + 1
+export_gif(animation, sys.argv[2], skip_frames=0)
+`, tgsPath, gifPath)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	// Convert GIF to PNG
+	return exec.CommandContext(ctx, "convert", gifPath+"[0]", pngPath).Run()
+}
+
+// extractVideoFrame extracts the first frame from a WEBM video
+func extractVideoFrame(ctx context.Context, webmPath, pngPath string) error {
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", webmPath, "-vframes", "1", "-f", "image2", pngPath)
+	return cmd.Run()
 }
 
 func convertWebPToPNG(ctx context.Context, src, dst string) error {

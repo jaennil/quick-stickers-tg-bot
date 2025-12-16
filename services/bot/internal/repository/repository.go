@@ -11,6 +11,8 @@ type Sticker struct {
 	Emoji      string
 	OCREngine  string
 	ManualEdit bool
+	IsAnimated bool
+	IsVideo    bool
 }
 
 type PackStats struct {
