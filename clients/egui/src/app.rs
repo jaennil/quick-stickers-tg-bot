@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
+use tracing::{debug, info, warn};
 
 use crate::cache::ThumbnailCache;
 use crate::db::Database;
@@ -94,6 +95,7 @@ impl StickerApp {
         let thumb_cache = cache.clone();
         let thumb_rt = rt.clone();
         thread::spawn(move || {
+            info!("[thumb] thumbnail loader thread started");
             while let Ok(file_id) = thumb_request_rx.recv() {
                 let db = thumb_db.clone();
                 let cache = thumb_cache.clone();
@@ -101,19 +103,24 @@ impl StickerApp {
                 let fid = file_id.clone();
 
                 thumb_rt.spawn(async move {
+                    debug!("[thumb] loading: {}", &fid[..20.min(fid.len())]);
+
                     // Try cache first
                     if let Some(data) = cache.get(&fid).await {
+                        debug!("[thumb] found in cache: {}", &fid[..20.min(fid.len())]);
                         let _ = tx.send(ThumbnailResult::Loaded(fid, data));
                         return;
                     }
 
                     // Try database
                     if let Ok(Some(data)) = db.get_thumbnail(&fid).await {
+                        debug!("[thumb] found in db: {}", &fid[..20.min(fid.len())]);
                         let _ = cache.set(&fid, data.clone()).await;
                         let _ = tx.send(ThumbnailResult::Loaded(fid, data));
                         return;
                     }
 
+                    debug!("[thumb] not found: {}", &fid[..20.min(fid.len())]);
                     let _ = tx.send(ThumbnailResult::NotFound(fid));
                 });
             }
@@ -122,12 +129,14 @@ impl StickerApp {
         // Spawn chat detector thread (runs xdotool in background)
         let chats_for_detector = chats.clone();
         thread::spawn(move || {
+            info!("[chat] chat detector thread started");
             loop {
                 thread::sleep(Duration::from_millis(500));
 
                 if let Some(name) = detect_telegram_chat() {
                     // Only send if chat exists in our list
                     if chats_for_detector.iter().any(|c| c.name == name) {
+                        debug!("[chat] detected active chat: {}", name);
                         let _ = chat_tx.send(name);
                     }
                 }
@@ -136,11 +145,18 @@ impl StickerApp {
 
         // Initial search - load all stickers
         {
+            info!("[search] loading initial stickers");
             let db = db.clone();
             let tx = search_tx.clone();
             rt.spawn(async move {
-                if let Ok(stickers) = db.search_stickers("").await {
-                    let _ = tx.send(stickers);
+                match db.search_stickers("").await {
+                    Ok(stickers) => {
+                        info!("[search] initial load: {} stickers", stickers.len());
+                        let _ = tx.send(stickers);
+                    }
+                    Err(e) => {
+                        warn!("[search] initial load failed: {}", e);
+                    }
                 }
             });
         }
@@ -176,28 +192,38 @@ impl StickerApp {
     }
 
     fn trigger_search(&mut self) {
+        debug!("[search] trigger debounce");
         self.search_debounce = Some(Instant::now());
     }
 
     fn do_search(&mut self, db: &Arc<Database>) {
         let query = self.search_query.clone();
+        info!("[search] searching for: {:?}", query);
         let db = db.clone();
         let tx = self.search_tx.clone();
 
         self.rt.spawn(async move {
-            if let Ok(stickers) = db.search_stickers(&query).await {
-                let _ = tx.send(stickers);
+            match db.search_stickers(&query).await {
+                Ok(stickers) => {
+                    info!("[search] found {} stickers", stickers.len());
+                    let _ = tx.send(stickers);
+                }
+                Err(e) => {
+                    warn!("[search] error: {}", e);
+                }
             }
         });
     }
 
     fn send_sticker(&mut self) {
         let Some(chat) = &self.selected_chat else {
+            warn!("[send] no chat selected");
             self.status = "Select a chat first!".into();
             return;
         };
 
         let Some(sticker) = self.stickers.get(self.selected_sticker) else {
+            warn!("[send] no sticker selected");
             return;
         };
 
@@ -208,14 +234,17 @@ impl StickerApp {
         let chat_name = chat.name.clone();
         let tx = self.send_result_tx.clone();
 
+        info!("[send] sending sticker {} to chat {}", document_id, chat_name);
         self.status = "Sending...".into();
 
         self.rt.spawn(async move {
             match telegram.send_sticker(chat_id, &set_name, document_id).await {
                 Ok(_) => {
+                    info!("[send] success: sent to {}", chat_name);
                     let _ = tx.send(SendResult::Success(chat_name));
                 }
                 Err(e) => {
+                    warn!("[send] error: {}", e);
                     let _ = tx.send(SendResult::Error(e.to_string()));
                 }
             }
@@ -226,6 +255,7 @@ impl StickerApp {
         if self.textures.contains_key(file_id) || self.loading_thumbs.contains(file_id) {
             return;
         }
+        debug!("[thumb] requesting: {}", &file_id[..20.min(file_id.len())]);
         self.loading_thumbs.insert(file_id.to_string());
         let _ = self.thumb_tx.send(file_id.to_string());
     }
@@ -233,6 +263,7 @@ impl StickerApp {
     fn poll_all(&mut self, ctx: &egui::Context) {
         // Poll search results
         while let Ok(stickers) = self.search_rx.try_recv() {
+            debug!("[poll] received {} stickers", stickers.len());
             self.stickers = stickers;
             self.selected_sticker = 0;
             self.status = format!("Found {} stickers", self.stickers.len());
@@ -242,6 +273,7 @@ impl StickerApp {
         while let Ok(result) = self.thumb_result_rx.try_recv() {
             match result {
                 ThumbnailResult::Loaded(file_id, data) => {
+                    debug!("[poll] thumbnail loaded: {}", &file_id[..20.min(file_id.len())]);
                     self.loading_thumbs.remove(&file_id);
                     if let Ok(image) = image::load_from_memory(&data) {
                         let size = [image.width() as _, image.height() as _];
@@ -256,6 +288,7 @@ impl StickerApp {
                     }
                 }
                 ThumbnailResult::NotFound(file_id) => {
+                    debug!("[poll] thumbnail not found: {}", &file_id[..20.min(file_id.len())]);
                     self.loading_thumbs.remove(&file_id);
                 }
             }
@@ -265,9 +298,11 @@ impl StickerApp {
         while let Ok(result) = self.send_result_rx.try_recv() {
             match result {
                 SendResult::Success(chat_name) => {
+                    info!("[poll] send success: {}", chat_name);
                     self.status = format!("Sent to {}", chat_name);
                 }
                 SendResult::Error(e) => {
+                    warn!("[poll] send error: {}", e);
                     self.status = format!("Error: {}", e);
                 }
             }
@@ -277,11 +312,11 @@ impl StickerApp {
         while let Ok(chat_name) = self.chat_rx.try_recv() {
             if self.selected_chat.as_ref().map(|c| &c.name) != Some(&chat_name) {
                 if let Some(chat) = self.chats.iter().find(|c| c.name == chat_name) {
+                    info!("[poll] switching to chat: {}", chat_name);
                     self.selected_chat = Some(chat.clone());
                 }
             }
         }
-
     }
 }
 
@@ -383,6 +418,7 @@ impl eframe::App for StickerAppWithDb {
             match event {
                 HotkeyEvent::Toggle => {
                     app.visible = !app.visible;
+                    info!("[hotkey] toggle, visible={}", app.visible);
                     if app.visible {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         app.focus_search = true;
@@ -393,6 +429,7 @@ impl eframe::App for StickerAppWithDb {
 
         // Escape to hide
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            info!("[key] escape pressed, hiding window");
             app.visible = false;
         }
 
