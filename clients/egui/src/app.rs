@@ -1,12 +1,10 @@
 use eframe::egui;
-use std::collections::HashMap;
-use std::process::Command;
-use std::sync::mpsc::Receiver;
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
-use tokio::sync::RwLock;
-use tracing::info;
 
 use crate::cache::ThumbnailCache;
 use crate::db::Database;
@@ -14,51 +12,15 @@ use crate::hotkey::HotkeyEvent;
 use crate::models::{ChatInfo, Sticker};
 use crate::telegram::TelegramClient;
 
-/// Get current open Telegram chat name from window title using xdotool
-fn get_telegram_active_chat() -> Option<String> {
-    // Get all TelegramDesktop window IDs
-    let window_ids = Command::new("xdotool")
-        .args(["search", "--class", "TelegramDesktop"])
-        .output()
-        .ok()?;
+// Message types for async operations
+enum ThumbnailResult {
+    Loaded(String, Vec<u8>),
+    NotFound(String),
+}
 
-    let ids: Vec<&str> = std::str::from_utf8(&window_ids.stdout)
-        .ok()?
-        .lines()
-        .collect();
-
-    // Find window with chat name (not "TelegramDesktop" or "Media viewer")
-    for id in ids {
-        let name_output = Command::new("xdotool")
-            .args(["getwindowname", id])
-            .output()
-            .ok()?;
-
-        let name = std::str::from_utf8(&name_output.stdout)
-            .ok()?
-            .trim()
-            .to_string();
-
-        if name != "TelegramDesktop" && name != "Media viewer" && name != "Telegram Desktop" {
-            // Remove unread count suffix like " – (1)" or " – (99)"
-            let chat_name = if let Some(pos) = name.rfind(" – (") {
-                name[..pos].to_string()
-            } else {
-                name
-            };
-
-            // Remove invisible Unicode characters (LTR/RTL marks etc)
-            let clean_name: String = chat_name
-                .chars()
-                .filter(|c| !c.is_control() && *c != '\u{200e}' && *c != '\u{200f}' && *c != '\u{2068}' && *c != '\u{2069}')
-                .collect();
-
-            info!("[xdotool] detected active chat: {:?}", clean_name);
-            return Some(clean_name);
-        }
-    }
-
-    None
+enum SendResult {
+    Success(String),
+    Error(String),
 }
 
 pub struct StickerApp {
@@ -68,31 +30,36 @@ pub struct StickerApp {
     selected_sticker: usize,
     chats: Vec<ChatInfo>,
     selected_chat: Option<ChatInfo>,
-    chat_filter: String,
-    show_chat_dropdown: bool,
     status: String,
 
     // Thumbnails
     textures: HashMap<String, egui::TextureHandle>,
-    pending_thumbs: Arc<RwLock<Vec<String>>>,
+    loading_thumbs: HashSet<String>,
+    thumb_tx: Sender<String>,
+    thumb_result_rx: Receiver<ThumbnailResult>,
 
     // Backend
     rt: Arc<Runtime>,
-    db: Arc<Database>,
     telegram: Arc<TelegramClient>,
-    cache: Arc<ThumbnailCache>,
     hotkey_rx: Receiver<HotkeyEvent>,
+
+    // Search
+    search_tx: Sender<Vec<Sticker>>,
+    search_rx: Receiver<Vec<Sticker>>,
+    search_debounce: Option<Instant>,
+
+    // Send sticker
+    send_result_rx: Receiver<SendResult>,
+    send_result_tx: Sender<SendResult>,
+
+    // Chat auto-detect
+    chat_rx: Receiver<String>,
 
     // Window visibility
     visible: bool,
 
-    // Chat auto-update
-    last_chat_check: Instant,
-
-    // Focus search on next frame
+    // Focus
     focus_search: bool,
-
-    // Grid has focus for navigation
     grid_focused: bool,
 
     // Prevent double-send
@@ -101,7 +68,7 @@ pub struct StickerApp {
 
 impl StickerApp {
     pub fn new(
-        cc: &eframe::CreationContext<'_>,
+        _cc: &eframe::CreationContext<'_>,
         rt: Arc<Runtime>,
         db: Arc<Database>,
         telegram: Arc<TelegramClient>,
@@ -109,29 +76,77 @@ impl StickerApp {
         chats: Vec<ChatInfo>,
         hotkey_rx: Receiver<HotkeyEvent>,
     ) -> Self {
-        // Dark theme with transparency
-        let mut visuals = egui::Visuals::dark();
-        // Semi-transparent background (RGBA with alpha = 180 out of 255)
-        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 30, 180);
-        visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
-        visuals.window_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
-        visuals.extreme_bg_color = egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180);
-        cc.egui_ctx.set_visuals(visuals);
+        // Search channel
+        let (search_tx, search_rx) = mpsc::channel();
 
-        // Try to auto-select the currently open Telegram chat
-        let selected_chat = if let Some(active_name) = get_telegram_active_chat() {
-            chats.iter().find(|c| c.name == active_name).cloned().or_else(|| {
-                info!("[app] active chat '{}' not found in loaded chats, falling back to first", active_name);
-                chats.first().cloned()
-            })
-        } else {
-            info!("[app] could not detect active Telegram chat, falling back to first");
-            chats.first().cloned()
-        };
+        // Thumbnail loading channel
+        let (thumb_tx, thumb_request_rx) = mpsc::channel::<String>();
+        let (thumb_result_tx, thumb_result_rx) = mpsc::channel::<ThumbnailResult>();
 
-        if let Some(ref chat) = selected_chat {
-            info!("[app] selected chat: {} (id={})", chat.name, chat.id);
+        // Send result channel
+        let (send_result_tx, send_result_rx) = mpsc::channel();
+
+        // Chat detection channel
+        let (chat_tx, chat_rx) = mpsc::channel::<String>();
+
+        // Spawn thumbnail loader thread
+        let thumb_db = db.clone();
+        let thumb_cache = cache.clone();
+        let thumb_rt = rt.clone();
+        thread::spawn(move || {
+            while let Ok(file_id) = thumb_request_rx.recv() {
+                let db = thumb_db.clone();
+                let cache = thumb_cache.clone();
+                let tx = thumb_result_tx.clone();
+                let fid = file_id.clone();
+
+                thumb_rt.spawn(async move {
+                    // Try cache first
+                    if let Some(data) = cache.get(&fid).await {
+                        let _ = tx.send(ThumbnailResult::Loaded(fid, data));
+                        return;
+                    }
+
+                    // Try database
+                    if let Ok(Some(data)) = db.get_thumbnail(&fid).await {
+                        let _ = cache.set(&fid, data.clone()).await;
+                        let _ = tx.send(ThumbnailResult::Loaded(fid, data));
+                        return;
+                    }
+
+                    let _ = tx.send(ThumbnailResult::NotFound(fid));
+                });
+            }
+        });
+
+        // Spawn chat detector thread (runs xdotool in background)
+        let chats_for_detector = chats.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(500));
+
+                if let Some(name) = detect_telegram_chat() {
+                    // Only send if chat exists in our list
+                    if chats_for_detector.iter().any(|c| c.name == name) {
+                        let _ = chat_tx.send(name);
+                    }
+                }
+            }
+        });
+
+        // Initial search - load all stickers
+        {
+            let db = db.clone();
+            let tx = search_tx.clone();
+            rt.spawn(async move {
+                if let Ok(stickers) = db.search_stickers("").await {
+                    let _ = tx.send(stickers);
+                }
+            });
         }
+
+        // Auto-select first chat
+        let selected_chat = chats.first().cloned();
 
         Self {
             search_query: String::new(),
@@ -139,45 +154,44 @@ impl StickerApp {
             selected_sticker: 0,
             chats,
             selected_chat,
-            chat_filter: String::new(),
-            show_chat_dropdown: false,
-            status: "Ready - Ctrl+Shift+S to toggle".into(),
+            status: "Loading...".into(),
             textures: HashMap::new(),
-            pending_thumbs: Arc::new(RwLock::new(Vec::new())),
+            loading_thumbs: HashSet::new(),
+            thumb_tx,
+            thumb_result_rx,
             rt,
-            db,
             telegram,
-            cache,
             hotkey_rx,
+            search_tx,
+            search_rx,
+            search_debounce: None,
+            send_result_rx,
+            send_result_tx,
+            chat_rx,
             visible: true,
-            last_chat_check: Instant::now(),
             focus_search: true,
             grid_focused: false,
             just_sent: false,
         }
     }
 
-    fn search_stickers(&mut self) {
-        let db = self.db.clone();
-        let query = self.search_query.clone();
-
-        info!("Searching for: {:?}", query);
-        let stickers = self.rt.block_on(async { db.search_stickers(&query).await });
-
-        match stickers {
-            Ok(s) => {
-                info!("Found {} stickers", s.len());
-                self.stickers = s;
-                self.selected_sticker = 0;
-            }
-            Err(e) => {
-                info!("Search error: {}", e);
-                self.status = format!("Search error: {}", e);
-            }
-        }
+    fn trigger_search(&mut self) {
+        self.search_debounce = Some(Instant::now());
     }
 
-    fn send_selected_sticker(&mut self) {
+    fn do_search(&mut self, db: &Arc<Database>) {
+        let query = self.search_query.clone();
+        let db = db.clone();
+        let tx = self.search_tx.clone();
+
+        self.rt.spawn(async move {
+            if let Ok(stickers) = db.search_stickers(&query).await {
+                let _ = tx.send(stickers);
+            }
+        });
+    }
+
+    fn send_sticker(&mut self) {
         let Some(chat) = &self.selected_chat else {
             self.status = "Select a chat first!".into();
             return;
@@ -192,109 +206,197 @@ impl StickerApp {
         let set_name = sticker.set_name.clone();
         let document_id = sticker.document_id;
         let chat_name = chat.name.clone();
+        let tx = self.send_result_tx.clone();
 
         self.status = "Sending...".into();
 
-        info!("Sending sticker: set={}, document_id={} to chat={}", set_name, document_id, chat_id);
-
-        let result = self
-            .rt
-            .block_on(async { telegram.send_sticker(chat_id, &set_name, document_id).await });
-
-        match result {
-            Ok(_) => {
-                self.status = format!("Sent to {}", chat_name);
+        self.rt.spawn(async move {
+            match telegram.send_sticker(chat_id, &set_name, document_id).await {
+                Ok(_) => {
+                    let _ = tx.send(SendResult::Success(chat_name));
+                }
+                Err(e) => {
+                    let _ = tx.send(SendResult::Error(e.to_string()));
+                }
             }
-            Err(e) => {
-                info!("Send error: {}", e);
-                self.status = format!("Error: {}", e);
+        });
+    }
+
+    fn request_thumbnail(&mut self, file_id: &str) {
+        if self.textures.contains_key(file_id) || self.loading_thumbs.contains(file_id) {
+            return;
+        }
+        self.loading_thumbs.insert(file_id.to_string());
+        let _ = self.thumb_tx.send(file_id.to_string());
+    }
+
+    fn poll_all(&mut self, ctx: &egui::Context) {
+        // Poll search results
+        while let Ok(stickers) = self.search_rx.try_recv() {
+            self.stickers = stickers;
+            self.selected_sticker = 0;
+            self.status = format!("Found {} stickers", self.stickers.len());
+        }
+
+        // Poll thumbnail results
+        while let Ok(result) = self.thumb_result_rx.try_recv() {
+            match result {
+                ThumbnailResult::Loaded(file_id, data) => {
+                    self.loading_thumbs.remove(&file_id);
+                    if let Ok(image) = image::load_from_memory(&data) {
+                        let size = [image.width() as _, image.height() as _];
+                        let rgba = image.to_rgba8();
+                        let pixels = rgba.as_flat_samples();
+                        let texture = ctx.load_texture(
+                            &file_id,
+                            egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()),
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.textures.insert(file_id, texture);
+                    }
+                }
+                ThumbnailResult::NotFound(file_id) => {
+                    self.loading_thumbs.remove(&file_id);
+                }
             }
+        }
+
+        // Poll send results
+        while let Ok(result) = self.send_result_rx.try_recv() {
+            match result {
+                SendResult::Success(chat_name) => {
+                    self.status = format!("Sent to {}", chat_name);
+                }
+                SendResult::Error(e) => {
+                    self.status = format!("Error: {}", e);
+                }
+            }
+        }
+
+        // Poll chat detection
+        while let Ok(chat_name) = self.chat_rx.try_recv() {
+            if self.selected_chat.as_ref().map(|c| &c.name) != Some(&chat_name) {
+                if let Some(chat) = self.chats.iter().find(|c| c.name == chat_name) {
+                    self.selected_chat = Some(chat.clone());
+                }
+            }
+        }
+
+    }
+}
+
+fn detect_telegram_chat() -> Option<String> {
+    use std::process::Command;
+
+    let output = Command::new("xdotool")
+        .args(["search", "--class", "TelegramDesktop"])
+        .output()
+        .ok()?;
+
+    let ids: Vec<&str> = std::str::from_utf8(&output.stdout)
+        .ok()?
+        .lines()
+        .collect();
+
+    for id in ids {
+        let name_output = Command::new("xdotool")
+            .args(["getwindowname", id])
+            .output()
+            .ok()?;
+
+        let name = std::str::from_utf8(&name_output.stdout)
+            .ok()?
+            .trim()
+            .to_string();
+
+        if name != "TelegramDesktop" && name != "Media viewer" && name != "Telegram Desktop" {
+            let chat_name = if let Some(pos) = name.rfind(" – (") {
+                name[..pos].to_string()
+            } else {
+                name
+            };
+
+            let clean: String = chat_name
+                .chars()
+                .filter(|c| !c.is_control() && *c != '\u{200e}' && *c != '\u{200f}' && *c != '\u{2068}' && *c != '\u{2069}')
+                .collect();
+
+            return Some(clean);
         }
     }
 
-    fn load_thumbnail(&mut self, ctx: &egui::Context, file_id: &str) {
-        if self.textures.contains_key(file_id) {
-            return;
-        }
+    None
+}
 
-        let cache = self.cache.clone();
-        let db = self.db.clone();
-        let file_id_owned = file_id.to_string();
+// Store db in app for async search
+pub struct StickerAppWithDb {
+    app: StickerApp,
+    db: Arc<Database>,
+}
 
-        // Try to load from cache synchronously for immediate display
-        let data = self.rt.block_on(async {
-            // Try memory/disk cache first
-            if let Some(data) = cache.get(&file_id_owned).await {
-                return Some(data);
-            }
+impl StickerAppWithDb {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        rt: Arc<Runtime>,
+        db: Arc<Database>,
+        telegram: Arc<TelegramClient>,
+        cache: Arc<ThumbnailCache>,
+        chats: Vec<ChatInfo>,
+        hotkey_rx: Receiver<HotkeyEvent>,
+    ) -> Self {
+        // Dark theme
+        let mut visuals = egui::Visuals::dark();
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 30, 180);
+        visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
+        visuals.window_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
+        visuals.extreme_bg_color = egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180);
+        cc.egui_ctx.set_visuals(visuals);
 
-            // Try database
-            if let Ok(Some(data)) = db.get_thumbnail(&file_id_owned).await {
-                // Save to cache for next time
-                let _ = cache.set(&file_id_owned, data.clone()).await;
-                return Some(data);
-            }
-
-            None
-        });
-
-        if let Some(data) = data {
-            if let Ok(image) = image::load_from_memory(&data) {
-                let size = [image.width() as _, image.height() as _];
-                let rgba = image.to_rgba8();
-                let pixels = rgba.as_flat_samples();
-
-                let texture = ctx.load_texture(
-                    &file_id_owned,
-                    egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()),
-                    egui::TextureOptions::LINEAR,
-                );
-
-                self.textures.insert(file_id_owned, texture);
-            }
+        Self {
+            app: StickerApp::new(cc, rt, db.clone(), telegram, cache, chats, hotkey_rx),
+            db,
         }
     }
 }
 
-impl eframe::App for StickerApp {
+impl eframe::App for StickerAppWithDb {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        // Transparent background
         [0.0, 0.0, 0.0, 0.0]
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Handle hotkey events
-        while let Ok(event) = self.hotkey_rx.try_recv() {
+        let app = &mut self.app;
+
+        // Poll all async results
+        app.poll_all(ctx);
+
+        // Check search debounce
+        if let Some(start) = app.search_debounce {
+            if start.elapsed() > Duration::from_millis(200) {
+                app.search_debounce = None;
+                app.do_search(&self.db);
+            }
+        }
+
+        // Handle hotkey
+        while let Ok(event) = app.hotkey_rx.try_recv() {
             match event {
                 HotkeyEvent::Toggle => {
-                    self.visible = !self.visible;
-                    if self.visible {
+                    app.visible = !app.visible;
+                    if app.visible {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                        self.focus_search = true;
+                        app.focus_search = true;
                     }
                 }
             }
         }
 
-        // Periodically check for active Telegram chat (every 500ms)
-        if self.last_chat_check.elapsed() > Duration::from_millis(500) {
-            self.last_chat_check = Instant::now();
-            if let Some(active_name) = get_telegram_active_chat() {
-                if self.selected_chat.as_ref().map(|c| &c.name) != Some(&active_name) {
-                    if let Some(chat) = self.chats.iter().find(|c| c.name == active_name) {
-                        info!("[app] live update: switching to chat '{}'", active_name);
-                        self.selected_chat = Some(chat.clone());
-                    }
-                }
-            }
-        }
-
-        // Handle Escape globally
+        // Escape to hide
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.visible = false;
+            app.visible = false;
         }
 
-        if !self.visible {
+        if !app.visible {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
         } else {
@@ -307,22 +409,19 @@ impl eframe::App for StickerApp {
             // Chat selector
             ui.horizontal(|ui| {
                 ui.label("Chat:");
-
-                let selected_text = self
-                    .selected_chat
+                let selected_text = app.selected_chat
                     .as_ref()
                     .map(|c| c.to_string())
-                    .unwrap_or_else(|| "Select chat...".into());
+                    .unwrap_or_else(|| "Select...".into());
 
-                egui::ComboBox::from_id_salt("chat_selector")
+                egui::ComboBox::from_id_salt("chat")
                     .selected_text(&selected_text)
                     .width(300.0)
                     .show_ui(ui, |ui| {
-                        for chat in &self.chats {
-                            let is_selected = self.selected_chat.as_ref() == Some(chat);
-                            if ui.selectable_label(is_selected, chat.to_string()).clicked() {
-                                info!("Selected chat: {:?}", chat);
-                                self.selected_chat = Some(chat.clone());
+                        for chat in &app.chats {
+                            let sel = app.selected_chat.as_ref() == Some(chat);
+                            if ui.selectable_label(sel, chat.to_string()).clicked() {
+                                app.selected_chat = Some(chat.clone());
                             }
                         }
                     });
@@ -330,203 +429,147 @@ impl eframe::App for StickerApp {
 
             ui.add_space(8.0);
 
-            // Search input
-            let search_response = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Search stickers... (Enter to send)")
+            // Search
+            let search = ui.add(
+                egui::TextEdit::singleline(&mut app.search_query)
+                    .hint_text("Search... (Enter to send)")
                     .desired_width(ui.available_width()),
             );
 
-            // Focus search field when window becomes visible
-            if self.focus_search {
-                search_response.request_focus();
-                self.focus_search = false;
-                // Load all stickers on first open
-                if self.stickers.is_empty() {
-                    self.search_stickers();
-                }
+            if app.focus_search {
+                search.request_focus();
+                app.focus_search = false;
             }
 
-            if search_response.changed() {
-                info!("searching, query = {:?}", self.search_query);
-                self.search_stickers();
-                self.grid_focused = false;
+            if search.changed() {
+                app.trigger_search();
+                app.grid_focused = false;
             }
 
-            // Tab switches focus between search and grid
+            // Tab to switch focus
             if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-                if !self.grid_focused && !self.stickers.is_empty() {
-                    info!("[nav] Tab: switching to grid");
-                    self.grid_focused = true;
-                    ctx.memory_mut(|m| m.surrender_focus(search_response.id));
+                if !app.grid_focused && !app.stickers.is_empty() {
+                    app.grid_focused = true;
+                    ctx.memory_mut(|m| m.surrender_focus(search.id));
                 } else {
-                    info!("[nav] Tab: switching to search");
-                    self.grid_focused = false;
-                    self.focus_search = true;
+                    app.grid_focused = false;
+                    app.focus_search = true;
                 }
             }
 
-            // Reset just_sent flag when Enter is released
+            // Enter released
             if ui.input(|i| i.key_released(egui::Key::Enter)) {
-                info!("[enter] released, resetting just_sent");
-                self.just_sent = false;
+                app.just_sent = false;
             }
 
-            // Handle Enter to send sticker
-            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if enter_pressed {
-                info!("[enter] pressed, just_sent={}, stickers={}, selected={}",
-                      self.just_sent, self.stickers.len(), self.selected_sticker);
-            }
-            if enter_pressed && !self.stickers.is_empty() && !self.just_sent {
-                info!("[enter] sending sticker idx={}", self.selected_sticker);
-                self.send_selected_sticker();
-                self.just_sent = true;
+            // Enter to send
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !app.stickers.is_empty() && !app.just_sent {
+                app.send_sticker();
+                app.just_sent = true;
             }
 
-            // Calculate grid columns for navigation
-            let available_width = ui.available_width();
+            // Grid navigation
             let thumb_size = 100.0;
             let spacing = 8.0;
-            let cols = ((available_width + spacing) / (thumb_size + spacing)).max(1.0) as usize;
+            let cols = ((ui.available_width() + spacing) / (thumb_size + spacing)).max(1.0) as usize;
 
-            // Handle navigation when grid is focused (vim keys + arrows)
-            if self.grid_focused {
-                let sticker_count = self.stickers.len();
-                if sticker_count > 0 {
-                    // Left: h or ArrowLeft
-                    if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
-                        info!("[nav] left, selected: {} -> {}", self.selected_sticker, self.selected_sticker.saturating_sub(1));
-                        if self.selected_sticker > 0 {
-                            self.selected_sticker -= 1;
-                        }
+            if app.grid_focused && !app.stickers.is_empty() {
+                let count = app.stickers.len();
+                if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
+                    if app.selected_sticker > 0 {
+                        app.selected_sticker -= 1;
                     }
-                    // Right: l or ArrowRight
-                    if ui.input(|i| i.key_pressed(egui::Key::L) || i.key_pressed(egui::Key::ArrowRight)) {
-                        if self.selected_sticker < sticker_count - 1 {
-                            self.selected_sticker += 1;
-                        }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::L) || i.key_pressed(egui::Key::ArrowRight)) {
+                    if app.selected_sticker < count - 1 {
+                        app.selected_sticker += 1;
                     }
-                    // Up: k or ArrowUp
-                    if ui.input(|i| i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::ArrowUp)) {
-                        if self.selected_sticker >= cols {
-                            self.selected_sticker -= cols;
-                        }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::ArrowUp)) {
+                    if app.selected_sticker >= cols {
+                        app.selected_sticker -= cols;
                     }
-                    // Down: j or ArrowDown
-                    if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
-                        if self.selected_sticker + cols < sticker_count {
-                            self.selected_sticker += cols;
-                        }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
+                    if app.selected_sticker + cols < count {
+                        app.selected_sticker += cols;
                     }
                 }
             }
 
             ui.add_space(8.0);
 
-            // Collect sticker data first to avoid borrow issues
-            let sticker_data: Vec<_> = self
-                .stickers
-                .iter()
-                .enumerate()
-                .map(|(idx, s)| (idx, s.file_id.clone()))
+            // Sticker grid
+            let sticker_data: Vec<_> = app.stickers.iter().enumerate()
+                .map(|(i, s)| (i, s.file_id.clone()))
                 .collect();
 
-            let mut clicked_idx: Option<usize> = None;
-            let mut thumbs_to_load: Vec<String> = Vec::new();
+            let mut clicked = None;
 
-            // Results grid
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let available_width = ui.available_width();
-                    let thumb_size = 100.0;
-                    let spacing = 8.0;
-                    let cols = ((available_width + spacing) / (thumb_size + spacing)).max(1.0) as usize;
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                egui::Grid::new("grid").spacing([spacing, spacing]).show(ui, |ui| {
+                    for (idx, file_id) in &sticker_data {
+                        let selected = *idx == app.selected_sticker;
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(thumb_size, thumb_size),
+                            egui::Sense::click(),
+                        );
 
-                    egui::Grid::new("sticker_grid")
-                        .spacing([spacing, spacing])
-                        .show(ui, |ui| {
-                            for (idx, file_id) in &sticker_data {
-                                let is_selected = *idx == self.selected_sticker;
+                        let bg = if selected {
+                            egui::Color32::from_rgb(9, 71, 113)
+                        } else if resp.hovered() {
+                            egui::Color32::from_rgb(42, 45, 46)
+                        } else {
+                            egui::Color32::from_rgb(37, 37, 38)
+                        };
 
-                                let (rect, response) = ui.allocate_exact_size(
-                                    egui::vec2(thumb_size, thumb_size),
-                                    egui::Sense::click(),
-                                );
+                        ui.painter().rect_filled(rect, 6.0, bg);
 
-                                // Background
-                                let bg_color = if is_selected {
-                                    egui::Color32::from_rgb(9, 71, 113)
-                                } else if response.hovered() {
-                                    egui::Color32::from_rgb(42, 45, 46)
-                                } else {
-                                    egui::Color32::from_rgb(37, 37, 38)
-                                };
+                        if let Some(tex) = app.textures.get(file_id) {
+                            let img_size = tex.size_vec2();
+                            let scale = (thumb_size / img_size.x.max(img_size.y)).min(1.0);
+                            let scaled = img_size * scale;
+                            let offset = (egui::vec2(thumb_size, thumb_size) - scaled) / 2.0;
 
-                                ui.painter().rect_filled(rect, 6.0, bg_color);
+                            ui.painter().image(
+                                tex.id(),
+                                egui::Rect::from_min_size(rect.min + offset, scaled),
+                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                egui::Color32::WHITE,
+                            );
+                        } else {
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "...",
+                                egui::FontId::proportional(16.0),
+                                egui::Color32::GRAY,
+                            );
+                            app.request_thumbnail(file_id);
+                        }
 
-                                // Image or placeholder
-                                if let Some(texture) = self.textures.get(file_id) {
-                                    let image_size = texture.size_vec2();
-                                    let scale = (thumb_size / image_size.x.max(image_size.y)).min(1.0);
-                                    let scaled_size = image_size * scale;
-                                    let offset = (egui::vec2(thumb_size, thumb_size) - scaled_size) / 2.0;
+                        if resp.clicked() {
+                            clicked = Some(*idx);
+                        }
 
-                                    ui.painter().image(
-                                        texture.id(),
-                                        egui::Rect::from_min_size(rect.min + offset, scaled_size),
-                                        egui::Rect::from_min_max(
-                                            egui::pos2(0.0, 0.0),
-                                            egui::pos2(1.0, 1.0),
-                                        ),
-                                        egui::Color32::WHITE,
-                                    );
-                                } else {
-                                    // Loading placeholder
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        "...",
-                                        egui::FontId::proportional(20.0),
-                                        egui::Color32::GRAY,
-                                    );
-                                    thumbs_to_load.push(file_id.clone());
-                                }
-
-                                if response.clicked() {
-                                    clicked_idx = Some(*idx);
-                                }
-
-                                if (*idx + 1) % cols == 0 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
+                        if (*idx + 1) % cols == 0 {
+                            ui.end_row();
+                        }
+                    }
                 });
+            });
 
-            // Load thumbnails after iteration
-            for file_id in thumbs_to_load {
-                self.load_thumbnail(ctx, &file_id);
-            }
-
-            // Handle click after iteration (but not if we just sent via Enter)
-            if let Some(idx) = clicked_idx {
-                if !self.just_sent {
-                    info!("[click] clicked sticker idx={}", idx);
-                    self.selected_sticker = idx;
-                    self.send_selected_sticker();
-                } else {
-                    info!("[click] ignoring click because just_sent=true");
+            if let Some(idx) = clicked {
+                if !app.just_sent {
+                    app.selected_sticker = idx;
+                    app.send_sticker();
                 }
             }
 
-            // Status bar
             ui.add_space(8.0);
-            ui.colored_label(egui::Color32::from_rgb(136, 136, 136), &self.status);
+            ui.colored_label(egui::Color32::from_rgb(136, 136, 136), &app.status);
         });
 
-        // Request repaint for animations
-        ctx.request_repaint();
+        ctx.request_repaint_after(Duration::from_millis(16));
     }
 }

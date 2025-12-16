@@ -7,12 +7,11 @@ mod models;
 mod telegram;
 
 use anyhow::Result;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use app::StickerApp;
+use app::StickerAppWithDb;
 use cache::ThumbnailCache;
 use config::Config;
 use db::Database;
@@ -88,7 +87,7 @@ fn main() -> Result<()> {
         "Sticker Search",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(StickerApp::new(
+            Ok(Box::new(StickerAppWithDb::new(
                 cc, rt, db, telegram, cache, chats, hotkey_rx,
             )))
         }),
