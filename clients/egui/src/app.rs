@@ -106,9 +106,13 @@ impl StickerApp {
         chats: Vec<ChatInfo>,
         hotkey_rx: Receiver<HotkeyEvent>,
     ) -> Self {
-        // Dark theme
+        // Dark theme with transparency
         let mut visuals = egui::Visuals::dark();
-        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(30, 30, 30);
+        // Semi-transparent background (RGBA with alpha = 180 out of 255)
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 30, 180);
+        visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
+        visuals.window_fill = egui::Color32::from_rgba_unmultiplied(25, 25, 25, 180);
+        visuals.extreme_bg_color = egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180);
         cc.egui_ctx.set_visuals(visuals);
 
         // Try to auto-select the currently open Telegram chat
@@ -249,6 +253,11 @@ impl StickerApp {
 }
 
 impl eframe::App for StickerApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Transparent background
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle hotkey events
         while let Ok(event) = self.hotkey_rx.try_recv() {
