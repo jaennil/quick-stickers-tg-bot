@@ -88,6 +88,9 @@ pub struct StickerApp {
 
     // Chat auto-update
     last_chat_check: Instant,
+
+    // Focus search on next frame
+    focus_search: bool,
 }
 
 impl StickerApp {
@@ -138,6 +141,7 @@ impl StickerApp {
             hotkey_rx,
             visible: true,
             last_chat_check: Instant::now(),
+            focus_search: true,
         }
     }
 
@@ -254,6 +258,7 @@ impl eframe::App for StickerApp {
                     self.visible = !self.visible;
                     if self.visible {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.focus_search = true;
                     }
                 }
             }
@@ -319,6 +324,12 @@ impl eframe::App for StickerApp {
                     .hint_text("Search stickers... (Enter to send)")
                     .desired_width(ui.available_width()),
             );
+
+            // Focus search field when window becomes visible
+            if self.focus_search {
+                search_response.request_focus();
+                self.focus_search = false;
+            }
 
             if search_response.changed() {
                 info!("searching, query = {:?}", self.search_query);
