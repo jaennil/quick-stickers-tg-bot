@@ -94,6 +94,9 @@ pub struct StickerApp {
 
     // Grid has focus for navigation
     grid_focused: bool,
+
+    // Prevent double-send
+    just_sent: bool,
 }
 
 impl StickerApp {
@@ -150,6 +153,7 @@ impl StickerApp {
             last_chat_check: Instant::now(),
             focus_search: true,
             grid_focused: false,
+            just_sent: false,
         }
     }
 
@@ -362,11 +366,22 @@ impl eframe::App for StickerApp {
                 }
             }
 
+            // Reset just_sent flag when Enter is released
+            if ui.input(|i| i.key_released(egui::Key::Enter)) {
+                info!("[enter] released, resetting just_sent");
+                self.just_sent = false;
+            }
+
             // Handle Enter to send sticker
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if !self.stickers.is_empty() {
-                    self.send_selected_sticker();
-                }
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if enter_pressed {
+                info!("[enter] pressed, just_sent={}, stickers={}, selected={}",
+                      self.just_sent, self.stickers.len(), self.selected_sticker);
+            }
+            if enter_pressed && !self.stickers.is_empty() && !self.just_sent {
+                info!("[enter] sending sticker idx={}", self.selected_sticker);
+                self.send_selected_sticker();
+                self.just_sent = true;
             }
 
             // Calculate grid columns for navigation
@@ -495,10 +510,15 @@ impl eframe::App for StickerApp {
                 self.load_thumbnail(ctx, &file_id);
             }
 
-            // Handle click after iteration
+            // Handle click after iteration (but not if we just sent via Enter)
             if let Some(idx) = clicked_idx {
-                self.selected_sticker = idx;
-                self.send_selected_sticker();
+                if !self.just_sent {
+                    info!("[click] clicked sticker idx={}", idx);
+                    self.selected_sticker = idx;
+                    self.send_selected_sticker();
+                } else {
+                    info!("[click] ignoring click because just_sent=true");
+                }
             }
 
             // Status bar
