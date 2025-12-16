@@ -79,7 +79,8 @@ fn main() -> Result<()> {
             .with_inner_size([700.0, 650.0])
             .with_decorations(false)
             .with_always_on_top()
-            .with_transparent(true),
+            .with_transparent(true)
+            .with_window_type(egui::X11WindowType::Dialog),
         ..Default::default()
     };
 
