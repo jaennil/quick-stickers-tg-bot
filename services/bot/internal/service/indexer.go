@@ -46,8 +46,9 @@ type IndexReport struct {
 }
 
 type thumbJob struct {
-	FileID  string
-	FileURL string
+	FileID      string
+	FileURL     string
+	StickerType StickerType
 }
 
 type stickerJob struct {
@@ -167,7 +168,7 @@ func (i *Indexer) IndexPack(
 					return
 				default:
 				}
-				if err := i.DownloadAndSaveThumbnail(indexCtx, job.FileID, job.FileURL); err != nil {
+				if err := i.DownloadAndSaveThumbnailWithType(indexCtx, job.FileID, job.FileURL, job.StickerType); err != nil {
 					logger.Log.Debugw("[THUMB] failed to save thumbnail",
 						"worker", workerID,
 						"file_id", job.FileID[:20]+"...",
@@ -295,7 +296,7 @@ func (i *Indexer) IndexPack(
 						reprocessed.Add(1)
 					}
 					// Queue thumbnail download
-					thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL}
+					thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL, StickerType: stickerType}
 					logger.Log.Infow("[INDEX] sticker saved",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,
@@ -564,6 +565,10 @@ func (i *Indexer) CompareOCREngines(ctx context.Context, fileURL string) []ocr.C
 }
 
 func (i *Indexer) DownloadAndSaveThumbnail(ctx context.Context, fileID, fileURL string) error {
+	return i.DownloadAndSaveThumbnailWithType(ctx, fileID, fileURL, StickerTypeStatic)
+}
+
+func (i *Indexer) DownloadAndSaveThumbnailWithType(ctx context.Context, fileID, fileURL string, stickerType StickerType) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -576,7 +581,18 @@ func (i *Indexer) DownloadAndSaveThumbnail(ctx context.Context, fileID, fileURL 
 	}
 	defer resp.Body.Close()
 
-	tmpFile, err := os.CreateTemp("", "thumb-*.webp")
+	// Determine file extension based on sticker type
+	var ext string
+	switch stickerType {
+	case StickerTypeAnimated:
+		ext = ".tgs"
+	case StickerTypeVideo:
+		ext = ".webm"
+	default:
+		ext = ".webp"
+	}
+
+	tmpFile, err := os.CreateTemp("", "thumb-*"+ext)
 	if err != nil {
 		return err
 	}
@@ -587,13 +603,27 @@ func (i *Indexer) DownloadAndSaveThumbnail(ctx context.Context, fileID, fileURL 
 	}
 	tmpFile.Close()
 
-	// Convert to PNG (keep original size for quality)
+	// Convert to PNG
 	pngPath := strings.TrimSuffix(tmpFile.Name(), filepath.Ext(tmpFile.Name())) + ".png"
 	defer os.Remove(pngPath)
 
-	cmd := exec.CommandContext(ctx, "convert", tmpFile.Name(), pngPath)
-	if err := cmd.Run(); err != nil {
-		return err
+	// Convert based on sticker type
+	switch stickerType {
+	case StickerTypeAnimated:
+		if err := extractTGSFrame(ctx, tmpFile.Name(), pngPath); err != nil {
+			logger.Log.Warnw("[THUMB] TGS frame extraction failed", "error", err)
+			return err
+		}
+	case StickerTypeVideo:
+		if err := extractVideoFrame(ctx, tmpFile.Name(), pngPath); err != nil {
+			logger.Log.Warnw("[THUMB] WEBM frame extraction failed", "error", err)
+			return err
+		}
+	default:
+		cmd := exec.CommandContext(ctx, "convert", tmpFile.Name(), pngPath)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
 	}
 
 	// Read PNG file

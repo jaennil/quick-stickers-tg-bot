@@ -173,7 +173,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 
 	// Save thumbnail in background
 	go func() {
-		if err := b.indexer.DownloadAndSaveThumbnail(ctx, sticker.FileID, fileURL); err != nil {
+		if err := b.indexer.DownloadAndSaveThumbnailWithType(ctx, sticker.FileID, fileURL, stickerType); err != nil {
 			logger.Log.Debugw("[THUMB] failed to save", "sticker", sticker.FileUniqueID, "error", err)
 		}
 	}()
