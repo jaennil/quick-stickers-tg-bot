@@ -35,7 +35,7 @@ impl Api {
 
     pub async fn search_stickers(&self, query: &str) -> Result<Vec<Sticker>> {
         let url = format!(
-            "{}/api/stickers?user_id={}&query={}",
+            "{}/stickers?user_id={}&query={}",
             self.base_url,
             self.user_id,
             urlencoding::encode(query)
@@ -69,7 +69,7 @@ impl Api {
 
     pub async fn get_thumbnail(&self, file_id: &str) -> Result<Option<Vec<u8>>> {
         let url = format!(
-            "{}/api/thumbnails/{}",
+            "{}/thumbnails/{}",
             self.base_url,
             urlencoding::encode(file_id)
         );
