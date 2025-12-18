@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jaennil/sticker-search-bot/internal/api"
 	"github.com/jaennil/sticker-search-bot/internal/bot"
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
@@ -41,6 +42,14 @@ func main() {
 	if err != nil {
 		logger.Log.Fatalf("Failed to create bot: %v", err)
 	}
+
+	// Start API server
+	apiServer := api.New(cfg.API, repo)
+	go func() {
+		if err := apiServer.Start(); err != nil {
+			logger.Log.Errorf("API server error: %v", err)
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

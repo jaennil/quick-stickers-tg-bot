@@ -18,6 +18,9 @@ spec:
       containers:
         - name: bot
           image: ghcr.io/jaennil/quick-stickers-tg-bot/bot:latest
+          ports:
+            - containerPort: 8080
+              name: api
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml

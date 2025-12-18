@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
 
+use crate::api::Api;
 use crate::cache::ThumbnailCache;
-use crate::db::Database;
 use crate::hotkey::HotkeyEvent;
 use crate::models::{ChatInfo, Sticker};
 use crate::telegram::TelegramClient;
@@ -71,7 +71,7 @@ impl StickerApp {
     pub fn new(
         _cc: &eframe::CreationContext<'_>,
         rt: Arc<Runtime>,
-        db: Arc<Database>,
+        api: Arc<Api>,
         telegram: Arc<TelegramClient>,
         cache: Arc<ThumbnailCache>,
         chats: Vec<ChatInfo>,
@@ -91,13 +91,13 @@ impl StickerApp {
         let (chat_tx, chat_rx) = mpsc::channel::<String>();
 
         // Spawn thumbnail loader thread
-        let thumb_db = db.clone();
+        let thumb_api = api.clone();
         let thumb_cache = cache.clone();
         let thumb_rt = rt.clone();
         thread::spawn(move || {
             info!("[thumb] thumbnail loader thread started");
             while let Ok(file_id) = thumb_request_rx.recv() {
-                let db = thumb_db.clone();
+                let api = thumb_api.clone();
                 let cache = thumb_cache.clone();
                 let tx = thumb_result_tx.clone();
                 let fid = file_id.clone();
@@ -112,9 +112,9 @@ impl StickerApp {
                         return;
                     }
 
-                    // Try database
-                    if let Ok(Some(data)) = db.get_thumbnail(&fid).await {
-                        debug!("[thumb] found in db: {}", &fid[..20.min(fid.len())]);
+                    // Try API
+                    if let Ok(Some(data)) = api.get_thumbnail(&fid).await {
+                        debug!("[thumb] found via API: {}", &fid[..20.min(fid.len())]);
                         let _ = cache.set(&fid, data.clone()).await;
                         let _ = tx.send(ThumbnailResult::Loaded(fid, data));
                         return;
@@ -146,10 +146,10 @@ impl StickerApp {
         // Initial search - load all stickers
         {
             info!("[search] loading initial stickers");
-            let db = db.clone();
+            let api = api.clone();
             let tx = search_tx.clone();
             rt.spawn(async move {
-                match db.search_stickers("").await {
+                match api.search_stickers("").await {
                     Ok(stickers) => {
                         info!("[search] initial load: {} stickers", stickers.len());
                         let _ = tx.send(stickers);
@@ -196,14 +196,14 @@ impl StickerApp {
         self.search_debounce = Some(Instant::now());
     }
 
-    fn do_search(&mut self, db: &Arc<Database>) {
+    fn do_search(&mut self, api: &Arc<Api>) {
         let query = self.search_query.clone();
         info!("[search] searching for: {:?}", query);
-        let db = db.clone();
+        let api = api.clone();
         let tx = self.search_tx.clone();
 
         self.rt.spawn(async move {
-            match db.search_stickers(&query).await {
+            match api.search_stickers(&query).await {
                 Ok(stickers) => {
                     info!("[search] found {} stickers", stickers.len());
                     let _ = tx.send(stickers);
@@ -363,17 +363,17 @@ fn detect_telegram_chat() -> Option<String> {
     None
 }
 
-// Store db in app for async search
-pub struct StickerAppWithDb {
+// Store api in app for async search
+pub struct StickerAppWithApi {
     app: StickerApp,
-    db: Arc<Database>,
+    api: Arc<Api>,
 }
 
-impl StickerAppWithDb {
+impl StickerAppWithApi {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         rt: Arc<Runtime>,
-        db: Arc<Database>,
+        api: Arc<Api>,
         telegram: Arc<TelegramClient>,
         cache: Arc<ThumbnailCache>,
         chats: Vec<ChatInfo>,
@@ -388,13 +388,13 @@ impl StickerAppWithDb {
         cc.egui_ctx.set_visuals(visuals);
 
         Self {
-            app: StickerApp::new(cc, rt, db.clone(), telegram, cache, chats, hotkey_rx),
-            db,
+            app: StickerApp::new(cc, rt, api.clone(), telegram, cache, chats, hotkey_rx),
+            api,
         }
     }
 }
 
-impl eframe::App for StickerAppWithDb {
+impl eframe::App for StickerAppWithApi {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 0.0]
     }
@@ -409,7 +409,7 @@ impl eframe::App for StickerAppWithDb {
         if let Some(start) = app.search_debounce {
             if start.elapsed() > Duration::from_millis(200) {
                 app.search_debounce = None;
-                app.do_search(&self.db);
+                app.do_search(&self.api);
             }
         }
 

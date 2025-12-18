@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub telegram: TelegramConfig,
-    pub database: DatabaseConfig,
+    pub api: ApiConfig,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
     pub user_id: i64,
@@ -18,12 +18,9 @@ pub struct TelegramConfig {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub password: String,
-    pub dbname: String,
+pub struct ApiConfig {
+    pub url: String,
+    pub api_key: String,
 }
 
 fn default_hotkey() -> String {
@@ -35,14 +32,5 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let config: Config = serde_yaml::from_str(&content)?;
         Ok(config)
-    }
-}
-
-impl DatabaseConfig {
-    pub fn connection_string(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.user, self.password, self.host, self.port, self.dbname
-        )
     }
 }

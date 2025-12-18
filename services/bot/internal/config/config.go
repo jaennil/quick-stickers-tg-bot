@@ -10,6 +10,7 @@ type Config struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	Database DatabaseConfig `yaml:"database"`
 	OCR      OCRConfig      `yaml:"ocr"`
+	API      APIConfig      `yaml:"api"`
 }
 
 type TelegramConfig struct {
@@ -26,6 +27,11 @@ type OCRConfig struct {
 	SpaceAPIKeys []string `yaml:"space_api_keys"`
 	ServerURL    string   `yaml:"server_url"`
 	ProxyURL     string   `yaml:"proxy_url"`
+}
+
+type APIConfig struct {
+	Port   int    `yaml:"port"`
+	APIKey string `yaml:"api_key"`
 }
 
 func Load(path string) (*Config, error) {
@@ -51,6 +57,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.OCR.ServerURL == "" {
 		cfg.OCR.ServerURL = "http://127.0.0.1:8765"
+	}
+	if cfg.API.Port == 0 {
+		cfg.API.Port = 8080
 	}
 
 	return &cfg, nil

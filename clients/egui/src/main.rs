@@ -1,7 +1,7 @@
+mod api;
 mod app;
 mod cache;
 mod config;
-mod db;
 mod hotkey;
 mod models;
 mod telegram;
@@ -11,10 +11,10 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use app::StickerAppWithDb;
+use api::Api;
+use app::StickerAppWithApi;
 use cache::ThumbnailCache;
 use config::Config;
-use db::Database;
 use hotkey::{HotkeyEvent, HotkeyListener};
 use telegram::TelegramClient;
 
@@ -39,10 +39,10 @@ fn main() -> Result<()> {
     let rt = Arc::new(Runtime::new()?);
 
     // Initialize components
-    println!("[3/7] Connecting to database...");
-    let db = rt.block_on(async { Database::connect(&config.database, config.user_id).await })
-        .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
-    let db = Arc::new(db);
+    println!("[3/7] Connecting to API...");
+    let api = Api::new(&config.api, config.user_id)
+        .map_err(|e| anyhow::anyhow!("Failed to create API client: {}", e))?;
+    let api = Arc::new(api);
 
     println!("[4/7] Connecting to Telegram...");
     let telegram = rt.block_on(async { TelegramClient::connect(&config.telegram, &workdir).await })
@@ -87,8 +87,8 @@ fn main() -> Result<()> {
         "Sticker Search",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(StickerAppWithDb::new(
-                cc, rt, db, telegram, cache, chats, hotkey_rx,
+            Ok(Box::new(StickerAppWithApi::new(
+                cc, rt, api, telegram, cache, chats, hotkey_rx,
             )))
         }),
     )
