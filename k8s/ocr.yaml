@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocr
+  namespace: sticker-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocr
+  template:
+    metadata:
+      labels:
+        app: ocr
+    spec:
+      containers:
+        - name: ocr
+          image: ghcr.io/jaennil/quick-stickers-tg-bot/ocr:latest
+          ports:
+            - containerPort: 8765
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ocr
+  namespace: sticker-bot
+spec:
+  selector:
+    app: ocr
+  ports:
+    - port: 8765
+      targetPort: 8765
