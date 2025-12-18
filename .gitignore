@@ -2,7 +2,6 @@
 .env
 .venv
 .venv/
-**/config.yaml
 scripts/
 
 # Clients - PyQt

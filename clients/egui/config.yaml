@@ -1,0 +1,11 @@
+telegram:
+  api_id: 839342
+  api_hash: "5af26bd34c0c81dc716a1abd6844d90e"
+
+api:
+  url: "https://k8s.ru.tuna.am/bot-api"
+  api_key: "609b5d9d264c00850861795e5dec18dcf5f3e032538ad457df7749aa1abe3881"
+
+hotkey: "<ctrl>+<shift>+s"
+
+user_id: 659782773
