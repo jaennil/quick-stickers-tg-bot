@@ -13,6 +13,8 @@ spec:
       labels:
         app: ocr
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: ocr
           image: ghcr.io/jaennil/quick-stickers-tg-bot/ocr:latest
