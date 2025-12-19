@@ -4,7 +4,7 @@ metadata:
   name: main-ingress
   namespace: sticker-bot
   annotations:
-    traefik.ingress.kubernetes.io/router.middlewares: sticker-bot-strip-prefix@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: sticker-bot-rewrite-api@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:
@@ -22,9 +22,9 @@ spec:
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: strip-prefix
+  name: rewrite-api
   namespace: sticker-bot
 spec:
-  stripPrefix:
-    prefixes:
-      - /bot-api
+  replacePathRegex:
+    regex: ^/bot-api/(.*)
+    replacement: /api/$1
