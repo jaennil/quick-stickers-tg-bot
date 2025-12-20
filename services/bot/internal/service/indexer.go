@@ -46,9 +46,10 @@ type IndexReport struct {
 }
 
 type thumbJob struct {
-	FileID      string
-	FileURL     string
-	StickerType StickerType
+	FileID           string
+	FileURL          string
+	StickerType      StickerType
+	ThumbnailFileID  string // Telegram's built-in thumbnail file_id (for animated/video)
 }
 
 type stickerJob struct {
@@ -296,7 +297,19 @@ func (i *Indexer) IndexPack(
 						reprocessed.Add(1)
 					}
 					// Queue thumbnail download
-					thumbJobs <- thumbJob{FileID: sticker.FileID, FileURL: fileURL, StickerType: stickerType}
+					tj := thumbJob{FileID: sticker.FileID, FileURL: fileURL, StickerType: stickerType}
+
+					// For animated/video stickers, use Telegram's built-in thumbnail
+					if (sticker.IsAnimated || sticker.IsVideo) && sticker.Thumbnail != nil {
+						thumbFile, err := tgBot.GetFile(indexCtx, &bot.GetFileParams{FileID: sticker.Thumbnail.FileID})
+						if err == nil {
+							tj.ThumbnailFileID = sticker.Thumbnail.FileID
+							tj.FileURL = tgBot.FileDownloadLink(thumbFile)
+							tj.StickerType = StickerTypeStatic // Telegram thumbnail is already a static image
+						}
+					}
+
+					thumbJobs <- tj
 					logger.Log.Infow("[INDEX] sticker saved",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,

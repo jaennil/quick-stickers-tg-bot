@@ -173,7 +173,19 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 
 	// Save thumbnail in background
 	go func() {
-		if err := b.indexer.DownloadAndSaveThumbnailWithType(ctx, sticker.FileID, fileURL, stickerType); err != nil {
+		thumbURL := fileURL
+		thumbType := stickerType
+
+		// For animated/video stickers, use Telegram's built-in thumbnail
+		if (sticker.IsAnimated || sticker.IsVideo) && sticker.Thumbnail != nil {
+			thumbFile, err := tgBot.GetFile(ctx, &bot.GetFileParams{FileID: sticker.Thumbnail.FileID})
+			if err == nil {
+				thumbURL = tgBot.FileDownloadLink(thumbFile)
+				thumbType = service.StickerTypeStatic // Telegram thumbnail is already a static image
+			}
+		}
+
+		if err := b.indexer.DownloadAndSaveThumbnailWithType(ctx, sticker.FileID, thumbURL, thumbType); err != nil {
 			logger.Log.Debugw("[THUMB] failed to save", "sticker", sticker.FileUniqueID, "error", err)
 		}
 	}()
