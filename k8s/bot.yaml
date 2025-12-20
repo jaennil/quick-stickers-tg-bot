@@ -50,3 +50,17 @@ spec:
         - name: xray-config
           configMap:
             name: xray-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bot
+  namespace: sticker-bot
+spec:
+  selector:
+    app: bot
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: metrics
+  type: ClusterIP
