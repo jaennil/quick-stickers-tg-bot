@@ -14,10 +14,6 @@ data:
         static_configs:
           - targets: ['localhost:9090']
 
-      - job_name: 'bot'
+      - job_name: 'sticker-bot'
         static_configs:
-          - targets: ['bot:8080']
-
-      - job_name: 'api'
-        static_configs:
-          - targets: ['bot-service:8080']
+          - targets: ['bot-api:8080']
