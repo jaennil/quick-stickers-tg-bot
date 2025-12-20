@@ -22,6 +22,19 @@ struct StickerResponse {
     emoji: String,
 }
 
+impl From<StickerResponse> for Sticker {
+    fn from(r: StickerResponse) -> Self {
+        Sticker {
+            sticker_id: r.sticker_id,
+            file_id: r.file_id,
+            document_id: r.document_id,
+            text: r.text,
+            set_name: r.set_name,
+            emoji: r.emoji,
+        }
+    }
+}
+
 impl Api {
     pub fn new(config: &ApiConfig, user_id: i64) -> Result<Self> {
         let client = Client::new();
@@ -41,30 +54,7 @@ impl Api {
             urlencoding::encode(query)
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .header("X-API-Key", &self.api_key)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("API error: {}", response.status());
-        }
-
-        let items: Vec<StickerResponse> = response.json().await?;
-
-        Ok(items
-            .into_iter()
-            .map(|r| Sticker {
-                sticker_id: r.sticker_id,
-                file_id: r.file_id,
-                document_id: r.document_id,
-                text: r.text,
-                set_name: r.set_name,
-                emoji: r.emoji,
-            })
-            .collect())
+        self.fetch_stickers(&url).await
     }
 
     pub async fn get_stickers_page(&self, limit: usize, offset: usize) -> Result<Vec<Sticker>> {
@@ -73,9 +63,13 @@ impl Api {
             self.base_url, self.user_id, limit, offset
         );
 
+        self.fetch_stickers(&url).await
+    }
+
+    async fn fetch_stickers(&self, url: &str) -> Result<Vec<Sticker>> {
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .header("X-API-Key", &self.api_key)
             .send()
             .await?;
@@ -85,18 +79,7 @@ impl Api {
         }
 
         let items: Vec<StickerResponse> = response.json().await?;
-
-        Ok(items
-            .into_iter()
-            .map(|r| Sticker {
-                sticker_id: r.sticker_id,
-                file_id: r.file_id,
-                document_id: r.document_id,
-                text: r.text,
-                set_name: r.set_name,
-                emoji: r.emoji,
-            })
-            .collect())
+        Ok(items.into_iter().map(Sticker::from).collect())
     }
 
     pub async fn get_thumbnail(&self, file_id: &str) -> Result<Option<Vec<u8>>> {

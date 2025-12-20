@@ -4,7 +4,9 @@ mod cache;
 mod config;
 mod hotkey;
 mod models;
+mod services;
 mod telegram;
+mod ui;
 
 use anyhow::Result;
 use std::sync::mpsc;
