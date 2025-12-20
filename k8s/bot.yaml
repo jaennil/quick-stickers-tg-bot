@@ -29,7 +29,24 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+        - name: xray
+          image: teddysun/xray:latest
+          args: ["xray", "run", "-c", "/etc/xray/config.json"]
+          volumeMounts:
+            - name: xray-config
+              mountPath: /etc/xray/config.json
+              subPath: config.json
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
       volumes:
         - name: config
           secret:
             secretName: bot-config
+        - name: xray-config
+          configMap:
+            name: xray-config
