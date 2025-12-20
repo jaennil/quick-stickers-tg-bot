@@ -634,8 +634,10 @@ impl eframe::App for StickerAppWithApi {
                         ui.painter().rect_filled(rect, 6.0, bg);
 
                         if let Some(tex) = app.textures.get(file_id) {
+                            let padding = 4.0;
+                            let inner_size = thumb_size - padding * 2.0;
                             let img_size = tex.size_vec2();
-                            let scale = (thumb_size / img_size.x.max(img_size.y)).min(1.0);
+                            let scale = (inner_size / img_size.x.max(img_size.y)).min(1.0);
                             let scaled = img_size * scale;
                             let offset = (egui::vec2(thumb_size, thumb_size) - scaled) / 2.0;
 
