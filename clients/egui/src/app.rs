@@ -24,6 +24,12 @@ enum SendResult {
     Error(String),
 }
 
+// For incremental loading of stickers
+enum StickerLoadResult {
+    Append(Vec<Sticker>),
+    Done,
+}
+
 pub struct StickerApp {
     // State
     search_query: String,
@@ -55,6 +61,10 @@ pub struct StickerApp {
 
     // Chat auto-detect
     chat_rx: Receiver<String>,
+
+    // Incremental sticker loading
+    sticker_load_rx: Receiver<StickerLoadResult>,
+    is_loading_all: bool,
 
     // Window visibility
     visible: bool,
@@ -89,6 +99,9 @@ impl StickerApp {
 
         // Chat detection channel
         let (chat_tx, chat_rx) = mpsc::channel::<String>();
+
+        // Sticker incremental loading channel
+        let (sticker_load_tx, sticker_load_rx) = mpsc::channel::<StickerLoadResult>();
 
         // Spawn thumbnail loader thread
         let thumb_api = api.clone();
@@ -143,19 +156,45 @@ impl StickerApp {
             }
         });
 
-        // Initial search - load all stickers
+        // Start async loading of all stickers in batches
         {
-            info!("[search] loading initial stickers");
+            info!("[load] starting incremental sticker loading");
             let api = api.clone();
-            let tx = search_tx.clone();
+            let tx = sticker_load_tx;
             rt.spawn(async move {
-                match api.search_stickers("").await {
-                    Ok(stickers) => {
-                        info!("[search] initial load: {} stickers", stickers.len());
-                        let _ = tx.send(stickers);
-                    }
-                    Err(e) => {
-                        warn!("[search] initial load failed: {}", e);
+                const BATCH_SIZE: usize = 50;
+                let mut offset = 0;
+                let mut total_loaded = 0;
+
+                loop {
+                    debug!("[load] fetching batch: offset={}, limit={}", offset, BATCH_SIZE);
+                    match api.get_stickers_page(BATCH_SIZE, offset).await {
+                        Ok(stickers) => {
+                            let count = stickers.len();
+                            total_loaded += count;
+                            info!("[load] loaded batch: {} stickers (total: {})", count, total_loaded);
+
+                            if count == 0 {
+                                info!("[load] all stickers loaded: {} total", total_loaded);
+                                let _ = tx.send(StickerLoadResult::Done);
+                                break;
+                            }
+
+                            let _ = tx.send(StickerLoadResult::Append(stickers));
+
+                            if count < BATCH_SIZE {
+                                info!("[load] last batch, all stickers loaded: {} total", total_loaded);
+                                let _ = tx.send(StickerLoadResult::Done);
+                                break;
+                            }
+
+                            offset += BATCH_SIZE;
+                        }
+                        Err(e) => {
+                            warn!("[load] batch load failed: {}", e);
+                            let _ = tx.send(StickerLoadResult::Done);
+                            break;
+                        }
                     }
                 }
             });
@@ -184,6 +223,8 @@ impl StickerApp {
             send_result_rx,
             send_result_tx,
             chat_rx,
+            sticker_load_rx,
+            is_loading_all: true,
             visible: true,
             focus_search: true,
             grid_focused: false,
@@ -261,9 +302,27 @@ impl StickerApp {
     }
 
     fn poll_all(&mut self, ctx: &egui::Context) {
+        // Poll incremental sticker loading results
+        while let Ok(result) = self.sticker_load_rx.try_recv() {
+            match result {
+                StickerLoadResult::Append(new_stickers) => {
+                    debug!("[poll] appending {} stickers", new_stickers.len());
+                    self.stickers.extend(new_stickers);
+                    if self.is_loading_all {
+                        self.status = format!("Loading... {} stickers", self.stickers.len());
+                    }
+                }
+                StickerLoadResult::Done => {
+                    info!("[poll] sticker loading complete: {} total", self.stickers.len());
+                    self.is_loading_all = false;
+                    self.status = format!("{} stickers", self.stickers.len());
+                }
+            }
+        }
+
         // Poll search results
         while let Ok(stickers) = self.search_rx.try_recv() {
-            debug!("[poll] received {} stickers", stickers.len());
+            debug!("[poll] received {} stickers from search", stickers.len());
             self.stickers = stickers;
             self.selected_sticker = 0;
             self.status = format!("Found {} stickers", self.stickers.len());

@@ -80,10 +80,26 @@ func (s *Server) handleStickers(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query().Get("query")
 
+	// Parse limit and offset for pagination
+	limit := 50
+	offset := 0
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
 	var stickers []*repository.Sticker
 	if query == "" {
-		stickers, err = s.repo.GetUserStickers(userID, 50, 0)
+		logger.Log.Debugw("fetching user stickers", "user_id", userID, "limit", limit, "offset", offset)
+		stickers, err = s.repo.GetUserStickers(userID, limit, offset)
 	} else {
+		logger.Log.Debugw("searching stickers", "user_id", userID, "query", query)
 		stickers, err = s.repo.SearchByText(userID, query)
 	}
 
