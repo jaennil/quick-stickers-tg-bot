@@ -10,6 +10,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
@@ -39,6 +40,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stickers", s.authMiddleware(s.handleStickers))
 	mux.HandleFunc("/api/thumbnails/", s.authMiddleware(s.handleThumbnails))
+	mux.Handle("/metrics", promhttp.Handler())
 
 	addr := fmt.Sprintf(":%d", s.port)
 	logger.Log.Infof("Starting API server on %s", addr)

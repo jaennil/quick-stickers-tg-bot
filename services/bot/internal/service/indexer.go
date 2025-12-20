@@ -17,6 +17,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
+	"github.com/jaennil/sticker-search-bot/internal/metrics"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
@@ -194,6 +195,7 @@ func (i *Indexer) IndexPack(
 			logger.Log.Debugw("[INDEX] worker started", "worker", workerID)
 
 			for job := range jobs {
+				stickerStart := time.Now()
 				sticker := job.Sticker
 				select {
 				case <-indexCtx.Done():
@@ -203,13 +205,16 @@ func (i *Indexer) IndexPack(
 				default:
 				}
 
+				getFileStart := time.Now()
 				file, err := tgBot.GetFile(indexCtx, &bot.GetFileParams{FileID: sticker.FileID})
+				metrics.TelegramGetFileDuration.Observe(time.Since(getFileStart).Seconds())
 				if err != nil {
 					logger.Log.Errorw("[INDEX] failed to get file",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,
 						"error", err,
 					)
+					metrics.StickersProcessedTotal.WithLabelValues("error").Inc()
 					completed.Add(1)
 					continue
 				}
@@ -264,6 +269,7 @@ func (i *Indexer) IndexPack(
 						"sticker", sticker.FileUniqueID,
 						"emoji", sticker.Emoji,
 					)
+					metrics.StickersProcessedTotal.WithLabelValues("no_text").Inc()
 					completed.Add(1)
 					continue
 				}
@@ -284,18 +290,34 @@ func (i *Indexer) IndexPack(
 					IsVideo:    sticker.IsVideo,
 				}
 
+				dbStart := time.Now()
 				if err := i.repo.SaveSticker(s); err != nil {
+					metrics.DBSaveDuration.Observe(time.Since(dbStart).Seconds())
 					logger.Log.Errorw("[INDEX] failed to save sticker",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,
 						"error", err,
 					)
+					metrics.StickersProcessedTotal.WithLabelValues("error").Inc()
 				} else {
+					metrics.DBSaveDuration.Observe(time.Since(dbStart).Seconds())
 					processed.Add(1)
 					withText.Add(1)
 					if job.IsReprocess {
 						reprocessed.Add(1)
 					}
+					// Record sticker type for metrics
+					var typeLabel string
+					switch {
+					case sticker.IsVideo:
+						typeLabel = "video"
+					case sticker.IsAnimated:
+						typeLabel = "animated"
+					default:
+						typeLabel = "static"
+					}
+					metrics.StickerProcessingDuration.WithLabelValues(typeLabel).Observe(time.Since(stickerStart).Seconds())
+					metrics.StickersProcessedTotal.WithLabelValues("success").Inc()
 					// Queue thumbnail download
 					tj := thumbJob{FileID: sticker.FileID, FileURL: fileURL, StickerType: stickerType}
 

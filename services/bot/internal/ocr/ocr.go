@@ -20,6 +20,7 @@ import (
 
 	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
+	"github.com/jaennil/sticker-search-bot/internal/metrics"
 	"golang.org/x/net/proxy"
 )
 
@@ -256,7 +257,10 @@ func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (s
 	start := time.Now()
 	// Отправляем
 	resp, err := o.client.Do(req)
+	duration := time.Since(start).Seconds()
 	if err != nil {
+		metrics.OCRRequestDuration.WithLabelValues("error").Observe(duration)
+		metrics.OCRRequestsTotal.WithLabelValues("error").Inc()
 		logger.Log.Errorw("[OCR] ocr.space request failed", "key", maskedKey, "error", err)
 		return "", err
 	}
@@ -264,12 +268,16 @@ func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (s
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		metrics.OCRRequestDuration.WithLabelValues("error").Observe(duration)
+		metrics.OCRRequestsTotal.WithLabelValues("error").Inc()
 		return "", err
 	}
 
 	// Check for quota exceeded (returns plain string, not JSON)
 	respStr := string(respBody)
 	if strings.Contains(respStr, "maximum") && strings.Contains(respStr, "times within") {
+		metrics.OCRRequestDuration.WithLabelValues("quota_exceeded").Observe(duration)
+		metrics.OCRRequestsTotal.WithLabelValues("quota_exceeded").Inc()
 		logger.Log.Warnw("[OCR] ocr.space quota exceeded", "key", maskedKey)
 		return "", ErrQuotaExceeded
 	}
@@ -294,6 +302,8 @@ func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (s
 	}
 
 	text := cleanText(strings.Join(texts, " "))
+	metrics.OCRRequestDuration.WithLabelValues("success").Observe(duration)
+	metrics.OCRRequestsTotal.WithLabelValues("success").Inc()
 	logger.Log.Debugw("[OCR] ocr.space success", "key", maskedKey, "duration", time.Since(start), "text_len", len(text))
 
 	return text, nil
