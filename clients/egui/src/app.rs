@@ -75,6 +75,9 @@ pub struct StickerApp {
 
     // Prevent double-send
     just_sent: bool,
+
+    // Thumbnail size
+    thumb_size: f32,
 }
 
 impl StickerApp {
@@ -229,6 +232,7 @@ impl StickerApp {
             focus_search: true,
             grid_focused: false,
             just_sent: false,
+            thumb_size: 100.0,
         }
     }
 
@@ -564,8 +568,16 @@ impl eframe::App for StickerAppWithApi {
                 app.just_sent = true;
             }
 
+            // Size slider
+            ui.horizontal(|ui| {
+                ui.label("Size:");
+                ui.add(egui::Slider::new(&mut app.thumb_size, 50.0..=200.0).show_value(false));
+            });
+
+            ui.add_space(4.0);
+
             // Grid navigation
-            let thumb_size = 100.0;
+            let thumb_size = app.thumb_size;
             let spacing = 8.0;
             let cols = ((ui.available_width() + spacing) / (thumb_size + spacing)).max(1.0) as usize;
 
