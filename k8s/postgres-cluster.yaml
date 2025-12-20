@@ -1,0 +1,45 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-cluster
+  namespace: sticker-bot
+spec:
+  instances: 2
+
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: "128MB"
+
+  bootstrap:
+    initdb:
+      database: sticker
+      owner: sticker
+      secret:
+        name: postgres-credentials
+
+  storage:
+    size: 2Gi
+
+  # Distribute pods across different nodes
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: sticker-bot
+type: kubernetes.io/basic-auth
+stringData:
+  username: sticker
+  password: sticker
