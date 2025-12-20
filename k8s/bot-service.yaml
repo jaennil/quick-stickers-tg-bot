@@ -6,7 +6,7 @@ metadata:
 spec:
   type: NodePort
   selector:
-    app: bot
+    app: api
   ports:
     - port: 8080
       targetPort: 8080

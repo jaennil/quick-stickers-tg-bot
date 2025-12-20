@@ -1,34 +1,47 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bot
+  name: api
   namespace: sticker-bot
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
-      app: bot
+      app: api
   template:
     metadata:
       labels:
-        app: bot
+        app: api
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: api
+              topologyKey: kubernetes.io/hostname
       imagePullSecrets:
         - name: ghcr-secret
       containers:
-        - name: bot
+        - name: api
           image: ghcr.io/jaennil/quick-stickers-tg-bot/bot:latest
+          env:
+            - name: MODE
+              value: "api"
+          ports:
+            - containerPort: 8080
+              name: api
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "100m"
+              memory: "64Mi"
+              cpu: "50m"
             limits:
-              memory: "512Mi"
-              cpu: "500m"
+              memory: "256Mi"
+              cpu: "200m"
       volumes:
         - name: config
           secret:

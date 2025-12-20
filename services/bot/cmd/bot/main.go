@@ -26,30 +26,14 @@ func main() {
 		logger.Log.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg.Telegram.Token == "" {
-		logger.Log.Fatal("telegram.token is required in config.yaml")
-	}
+	// MODE env: "api" = API only, "" or "bot" = bot + API
+	mode := os.Getenv("MODE")
 
 	repo, err := newRepository(cfg.Database)
 	if err != nil {
 		logger.Log.Fatalf("Failed to initialize repository: %v", err)
 	}
 	defer repo.Close()
-
-	ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ServerURL, cfg.OCR.ProxyURL)
-
-	b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
-	if err != nil {
-		logger.Log.Fatalf("Failed to create bot: %v", err)
-	}
-
-	// Start API server
-	apiServer := api.New(cfg.API, repo)
-	go func() {
-		if err := apiServer.Start(); err != nil {
-			logger.Log.Errorf("API server error: %v", err)
-		}
-	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -62,7 +46,36 @@ func main() {
 		cancel()
 	}()
 
-	b.Start(ctx)
+	if mode == "api" {
+		// API-only mode
+		logger.Log.Info("Starting in API-only mode")
+		apiServer := api.New(cfg.API, repo)
+		if err := apiServer.Start(); err != nil {
+			logger.Log.Fatalf("API server error: %v", err)
+		}
+	} else {
+		// Full mode: bot + API
+		if cfg.Telegram.Token == "" {
+			logger.Log.Fatal("telegram.token is required in config.yaml")
+		}
+
+		ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ServerURL, cfg.OCR.ProxyURL)
+
+		b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
+		if err != nil {
+			logger.Log.Fatalf("Failed to create bot: %v", err)
+		}
+
+		// Start API server
+		apiServer := api.New(cfg.API, repo)
+		go func() {
+			if err := apiServer.Start(); err != nil {
+				logger.Log.Errorf("API server error: %v", err)
+			}
+		}()
+
+		b.Start(ctx)
+	}
 }
 
 func newRepository(cfg config.DatabaseConfig) (repository.Repository, error) {
