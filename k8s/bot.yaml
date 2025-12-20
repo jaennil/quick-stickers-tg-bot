@@ -13,6 +13,8 @@ spec:
       labels:
         app: bot
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: jaennil
       imagePullSecrets:
         - name: ghcr-secret
       containers:
