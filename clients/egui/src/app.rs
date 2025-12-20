@@ -568,10 +568,13 @@ impl eframe::App for StickerAppWithApi {
                 app.just_sent = true;
             }
 
-            // Size slider
+            // Size slider (no keyboard focus)
             ui.horizontal(|ui| {
                 ui.label("Size:");
-                ui.add(egui::Slider::new(&mut app.thumb_size, 50.0..=200.0).show_value(false));
+                let slider = ui.add(egui::Slider::new(&mut app.thumb_size, 50.0..=200.0).show_value(false));
+                if slider.has_focus() {
+                    slider.surrender_focus();
+                }
             });
 
             ui.add_space(4.0);
