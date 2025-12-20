@@ -25,6 +25,8 @@ spec:
       labels:
         app: postgres
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: jaennil
       containers:
         - name: postgres
           image: postgres:16-alpine
