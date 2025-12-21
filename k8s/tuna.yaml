@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tuna
+  namespace: sticker-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tuna
+  template:
+    metadata:
+      labels:
+        app: tuna
+    spec:
+      containers:
+        - name: tuna
+          image: yuccastream/tuna:latest
+          command: ["tuna", "http", "bot-api:8080", "--subdomain", "k8s"]
+          env:
+            - name: TUNA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tuna-token
+                  key: token
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
