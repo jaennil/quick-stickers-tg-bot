@@ -41,7 +41,7 @@ telegram:
   api_hash: "YOUR_API_HASH"
 
 api:
-  url: "https://k8s.ru.tuna.am/bot-api"
+  url: "https://k8s.ru.tuna.am/api"
   api_key: "YOUR_API_KEY"
 
 hotkey: "<ctrl>+<shift>+s"
