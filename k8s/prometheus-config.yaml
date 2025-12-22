@@ -21,13 +21,3 @@ data:
       - job_name: 'bot'
         static_configs:
           - targets: ['bot:8080']
-
-      - job_name: 'guide-helper-cache'
-        static_configs:
-          - targets: ['cache.guide-helper.svc.cluster.local:8080']
-        metrics_path: '/metrics'
-
-      - job_name: 'guide-helper-tiles'
-        static_configs:
-          - targets: ['tiles.guide-helper.svc.cluster.local:8080']
-        metrics_path: '/metrics'
