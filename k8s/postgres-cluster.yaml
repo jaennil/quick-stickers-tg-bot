@@ -4,7 +4,7 @@ metadata:
   name: postgres-cluster
   namespace: sticker-bot
 spec:
-  instances: 2
+  instances: 1
 
   postgresql:
     parameters:
