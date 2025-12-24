@@ -10,7 +10,7 @@ spec:
     matchLabels:
       app: api
   endpoints:
-    - port: "8080"
+    - port: http
       interval: 15s
       path: /metrics
 ---
@@ -26,6 +26,6 @@ spec:
     matchLabels:
       app: bot
   endpoints:
-    - port: "8080"
+    - port: metrics
       interval: 15s
       path: /metrics
