@@ -4,19 +4,19 @@ kind: Kustomization
 namespace: sticker-bot
 
 resources:
-  - ../../base
-  - ingress.yaml
-  - bot-config-sealed.yaml
-  - ghcr-sealed.yaml
-  - postgres-sealed.yaml
+- ../../base
+- ingress.yaml
+- bot-config-sealed.yaml
+- ghcr-sealed.yaml
+- postgres-sealed.yaml
 
 images:
-  - name: bot
-    newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
-    newTag: latest
-  - name: api
-    newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
-    newTag: latest
-  - name: xray
-    newName: teddysun/xray
-    newTag: "1.8.24"
+- name: api
+  newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
+  newTag: e6fecb599c85af6983624b3e3fb98f1514989b1c
+- name: bot
+  newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
+  newTag: e6fecb599c85af6983624b3e3fb98f1514989b1c
+- name: xray
+  newName: teddysun/xray
+  newTag: 1.8.24
