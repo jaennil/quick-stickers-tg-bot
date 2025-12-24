@@ -3,8 +3,14 @@ kind: Ingress
 metadata:
   name: main-ingress
   namespace: sticker-bot
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - sb.dubrovskih.ru
+      secretName: sb-tls
   rules:
     - host: sb.dubrovskih.ru
       http:
