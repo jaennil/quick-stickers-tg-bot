@@ -6,7 +6,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: k8s.ru.tuna.am
+    - host: sb.dubrovskih.ru
       http:
         paths:
           - path: /api
