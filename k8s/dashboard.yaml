@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard
+  namespace: sticker-bot
+  labels:
+    grafana_dashboard: "1"
+data:
+  sticker-bot.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "OCR Request Duration (p95)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {"expr": "histogram_quantile(0.95, rate(ocr_request_duration_seconds_bucket{status=\"success\"}[5m]))", "legendFormat": "p95", "refId": "A"},
+            {"expr": "histogram_quantile(0.50, rate(ocr_request_duration_seconds_bucket{status=\"success\"}[5m]))", "legendFormat": "p50", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "OCR Requests Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"expr": "rate(ocr_requests_total[1m])", "legendFormat": "{{status}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Sticker Processing Duration (p95)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"expr": "histogram_quantile(0.95, rate(sticker_processing_duration_seconds_bucket[5m]))", "legendFormat": "{{type}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Stickers Processed Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{"expr": "rate(stickers_processed_total[1m])", "legendFormat": "{{status}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Telegram GetFile Duration (p95)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+          "targets": [{"expr": "histogram_quantile(0.95, rate(telegram_getfile_duration_seconds_bucket[5m]))", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "DB Save Duration (p95)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+          "targets": [{"expr": "histogram_quantile(0.95, rate(db_save_duration_seconds_bucket[5m]))", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Total Stickers Processed",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 16},
+          "targets": [{"expr": "sum(stickers_processed_total{status=\"success\"})", "refId": "A"}]
+        },
+        {
+          "title": "Total OCR Requests",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 16},
+          "targets": [{"expr": "sum(ocr_requests_total)", "refId": "A"}]
+        }
+      ],
+      "refresh": "5s",
+      "schemaVersion": 39,
+      "tags": ["sticker-bot"],
+      "templating": {"list": []},
+      "time": {"from": "now-15m", "to": "now"},
+      "title": "Sticker Bot",
+      "uid": "sticker-bot",
+      "version": 1
+    }

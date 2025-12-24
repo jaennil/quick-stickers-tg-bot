@@ -1,0 +1,31 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api
+  namespace: sticker-bot
+  labels:
+    app: api
+spec:
+  selector:
+    matchLabels:
+      app: api
+  endpoints:
+    - port: "8080"
+      interval: 15s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bot
+  namespace: sticker-bot
+  labels:
+    app: bot
+spec:
+  selector:
+    matchLabels:
+      app: bot
+  endpoints:
+    - port: "8080"
+      interval: 15s
+      path: /metrics
