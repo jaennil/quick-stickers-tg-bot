@@ -56,6 +56,8 @@ kind: Service
 metadata:
   name: bot
   namespace: sticker-bot
+  labels:
+    app: bot
 spec:
   selector:
     app: bot
