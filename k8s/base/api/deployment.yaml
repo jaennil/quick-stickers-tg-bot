@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api
-  namespace: sticker-bot
 spec:
   replicas: 1
   selector:
@@ -26,13 +25,13 @@ spec:
         - name: ghcr-secret
       containers:
         - name: api
-          image: ghcr.io/jaennil/quick-stickers-tg-bot/bot:latest
+          image: api
           env:
             - name: MODE
               value: "api"
           ports:
             - containerPort: 8080
-              name: api
+              name: http
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml

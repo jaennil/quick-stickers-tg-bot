@@ -2,7 +2,6 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: api
-  namespace: sticker-bot
   labels:
     app: api
 spec:
@@ -18,7 +17,6 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: bot
-  namespace: sticker-bot
   labels:
     app: bot
 spec:

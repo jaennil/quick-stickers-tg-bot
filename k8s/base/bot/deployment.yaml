@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: bot
-  namespace: sticker-bot
 spec:
   replicas: 1
   selector:
@@ -17,7 +16,10 @@ spec:
         - name: ghcr-secret
       containers:
         - name: bot
-          image: ghcr.io/jaennil/quick-stickers-tg-bot/bot:latest
+          image: bot
+          ports:
+            - containerPort: 8080
+              name: metrics
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml
@@ -30,7 +32,7 @@ spec:
               memory: "512Mi"
               cpu: "500m"
         - name: xray
-          image: teddysun/xray:latest
+          image: xray
           args: ["xray", "run", "-c", "/etc/xray/config.json"]
           volumeMounts:
             - name: xray-config
@@ -50,19 +52,3 @@ spec:
         - name: xray-config
           configMap:
             name: xray-config
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: bot
-  namespace: sticker-bot
-  labels:
-    app: bot
-spec:
-  selector:
-    app: bot
-  ports:
-    - port: 8080
-      targetPort: 8080
-      name: metrics
-  type: ClusterIP

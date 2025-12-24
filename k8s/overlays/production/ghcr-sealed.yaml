@@ -1,0 +1,14 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: ghcr-secret
+  namespace: sticker-bot
+spec:
+  encryptedData:
+    .dockerconfigjson: AgCAyjm8wTqSY0IyOeNC5eHNDf0FcjSIaEPcHibkxcWkBfW8DtQNrryF5TkRxFNbQRgdVO6pvGvVRpqHC2EoYYEu7fkdobqJ7jINBVX8A6n2BWzUC/AUNIkNCq8zzrbf+pt/tY0VHq8RYdwdaFmwtxDFxusBpTWAxP6UaqfMO+3cKFWwgJcdDPvkvYbfBviwcNPJSE5QNcHw10qYW/Y5PXxD2wTQljwXwjUBePot+LVaJ06wrOk1Jy6dGLPdW5AgamZRBWLz3BXAos9wkXIcrNXLQwaybWm7zRwvROgLF5jaGC6SRmkHYd7a8mrKweWOjnxCDjOPUvHf82TyrilI4diTSbv93ccMv3zRHp1OnAQl/Bm0fX7GwfQ1ms9Q5VORy4xSrPPkvg6Ci3TcmQYq1HhHoUrKvQt8OH51HqReR5pGSk/pBst+DskhuX7imvzhBBtgOajsFJoYdkApbxudfzM2aN+YOaxtPBlSn12RU7N84hrsfSu6WmTAMb9eWzY29NhnqOKA/zKUtJMaUaHiWNxswiZx2kAvlkesQsnXRQVjVCBMwJ4/lF7b7BUQYCPWhg/3uFRJvZshHHx1sY/vO6tHtsGXhYmCzGW205LcbE3iTK9pKnbj5vd+SoK5T/nTROZ0fK5ffviaZMP6y4sRfmMxRzxTB0NV7bhXfFlwb8i22IrjwO8fyZBtnUm5Ks4UYjBka1gE7O6r2JxEqLkFQYPbW2pPQ+7md94hRNc0MpeRJC3sQBVzSerBpgVGepr0OSO9WC05RjgkDNaxPBWcxBtfwdAtlVRYSYSs6RyVQQ2EX6RrGZQAzc9Ay3bdKmcmnSGBxjU=
+  template:
+    metadata:
+      name: ghcr-secret
+      namespace: sticker-bot
+    type: kubernetes.io/dockerconfigjson
