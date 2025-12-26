@@ -14,4 +14,5 @@ const (
 	CallbackPack        = "pack:"
 	CallbackDeletePack  = "deletepack:"
 	CallbackFallback    = "fallback:"
+	CallbackMedia       = "media:"
 )

@@ -43,6 +43,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		bot.WithCallbackQueryDataHandler(CallbackAllStickers, bot.MatchTypePrefix, b.handleAllStickersCallback),
 		bot.WithCallbackQueryDataHandler(CallbackPack, bot.MatchTypePrefix, b.handlePackCallback),
 		bot.WithCallbackQueryDataHandler(CallbackDeletePack, bot.MatchTypePrefix, b.handleDeletePackCallback),
+		bot.WithCallbackQueryDataHandler(CallbackMedia, bot.MatchTypePrefix, b.handleMediaCallback),
 	}
 
 	tgBot, err := bot.New(token, opts...)

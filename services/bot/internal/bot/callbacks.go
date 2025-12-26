@@ -9,6 +9,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
+	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/state"
 	"github.com/jaennil/sticker-search-bot/internal/ui"
 )
@@ -440,4 +441,46 @@ func (b *Bot) handleFallbackCallback(ctx context.Context, tgBot *bot.Bot, update
 	b.state.ClearRemainingStickers(userID)
 
 	go b.continueIndexing(ctx, tgBot, chatID, messageID, userID, setName, engine, remainingStickers)
+}
+
+func (b *Bot) handleMediaCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	data := strings.TrimPrefix(update.CallbackQuery.Data, CallbackMedia)
+	userID := update.CallbackQuery.From.ID
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	parts := strings.SplitN(data, ":", 2)
+	if len(parts) != 2 {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Ошибка",
+		})
+		return
+	}
+
+	mediaTypeStr, pageStr := parts[0], parts[1]
+	logger.Log.Infow("[CALLBACK] media", "type", mediaTypeStr, "page", pageStr, "user", userID)
+
+	if pageStr == "noop" {
+		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+		})
+		return
+	}
+
+	var page int
+	fmt.Sscanf(pageStr, "%d", &page)
+	if page < 1 {
+		page = 1
+	}
+
+	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	mediaType := repository.MediaTypeSticker
+	if mediaTypeStr == "photo" {
+		mediaType = repository.MediaTypePhoto
+	}
+
+	b.sendMediaByType(ctx, tgBot, chatID, userID, mediaType, page)
 }
