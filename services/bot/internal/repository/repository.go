@@ -1,5 +1,12 @@
 package repository
 
+type MediaType string
+
+const (
+	MediaTypeSticker MediaType = "sticker"
+	MediaTypePhoto   MediaType = "photo"
+)
+
 type Sticker struct {
 	ID         int64
 	UserID     int64
@@ -13,6 +20,7 @@ type Sticker struct {
 	ManualEdit bool
 	IsAnimated bool
 	IsVideo    bool
+	MediaType  MediaType
 }
 
 type PackStats struct {
@@ -38,6 +46,10 @@ type Repository interface {
 	GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error)
 	GetUserPackStickerCount(userID int64, setName string) (int, error)
 	DeleteUserPack(userID int64, setName string) error
+
+	// Media type filtering
+	GetUserMediaCount(userID int64, mediaType MediaType) (int, error)
+	GetUserMediaByType(userID int64, mediaType MediaType, limit, offset int) ([]*Sticker, error)
 
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error

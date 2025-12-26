@@ -7,7 +7,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-const stickerSelectFields = "id, user_id, sticker_id, set_name, file_id, document_id, text, emoji, ocr_engine, manual_edit, is_animated, is_video"
+const stickerSelectFields = "id, user_id, sticker_id, set_name, file_id, document_id, text, emoji, ocr_engine, manual_edit, is_animated, is_video, COALESCE(media_type, 'sticker') as media_type"
 
 type BaseRepository struct {
 	db *sqlx.DB
@@ -21,7 +21,7 @@ func NewBase(db *sqlx.DB) *BaseRepository {
 
 func scanSticker(rows *sql.Rows) (*Sticker, error) {
 	var st Sticker
-	err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit, &st.IsAnimated, &st.IsVideo)
+	err := rows.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit, &st.IsAnimated, &st.IsVideo, &st.MediaType)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +76,13 @@ func (r *BaseRepository) SetUserOCREngine(userID int64, engine string) error {
 
 func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 	textLower := strings.ToLower(sticker.Text)
+	mediaType := sticker.MediaType
+	if mediaType == "" {
+		mediaType = MediaTypeSticker
+	}
 	query := r.db.Rebind(`
-		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, document_id, text, text_lower, emoji, ocr_engine, is_animated, is_video)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO stickers (user_id, sticker_id, set_name, file_id, document_id, text, text_lower, emoji, ocr_engine, is_animated, is_video, media_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, sticker_id) DO UPDATE SET
 			text = EXCLUDED.text,
 			text_lower = EXCLUDED.text_lower,
@@ -86,9 +90,10 @@ func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 			ocr_engine = EXCLUDED.ocr_engine,
 			document_id = EXCLUDED.document_id,
 			is_animated = EXCLUDED.is_animated,
-			is_video = EXCLUDED.is_video
+			is_video = EXCLUDED.is_video,
+			media_type = EXCLUDED.media_type
 	`)
-	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.DocumentID, sticker.Text, textLower, sticker.Emoji, sticker.OCREngine, sticker.IsAnimated, sticker.IsVideo)
+	_, err := r.db.Exec(query, sticker.UserID, sticker.StickerID, sticker.SetName, sticker.FileID, sticker.DocumentID, sticker.Text, textLower, sticker.Emoji, sticker.OCREngine, sticker.IsAnimated, sticker.IsVideo, mediaType)
 	return err
 }
 
@@ -242,6 +247,29 @@ func (r *BaseRepository) GetThumbnail(fileID string) ([]byte, error) {
 	var thumbnail []byte
 	err := r.db.Get(&thumbnail, r.db.Rebind("SELECT thumbnail FROM sticker_thumbnails WHERE file_id = ?"), fileID)
 	return thumbnail, err
+}
+
+func (r *BaseRepository) GetUserMediaCount(userID int64, mediaType MediaType) (int, error) {
+	var count int
+	err := r.db.Get(&count, r.db.Rebind("SELECT COUNT(*) FROM stickers WHERE user_id = ? AND COALESCE(media_type, 'sticker') = ?"), userID, mediaType)
+	return count, err
+}
+
+func (r *BaseRepository) GetUserMediaByType(userID int64, mediaType MediaType, limit, offset int) ([]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT ` + stickerSelectFields + `
+		FROM stickers
+		WHERE user_id = ? AND COALESCE(media_type, 'sticker') = ?
+		ORDER BY id DESC
+		LIMIT ? OFFSET ?
+	`)
+	rows, err := r.db.Query(query, userID, mediaType, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanStickers(rows)
 }
 
 func (r *BaseRepository) Close() error {
