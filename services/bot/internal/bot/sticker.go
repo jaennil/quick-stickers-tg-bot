@@ -33,6 +33,11 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 	}
 
+	if update.Message.Photo != nil && len(update.Message.Photo) > 0 {
+		b.handlePhoto(ctx, tgBot, update)
+		return
+	}
+
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
