@@ -3,7 +3,7 @@ telegram:
 
 database:
   driver: "postgres"
-  dsn: "postgres://sticker:sticker@postgres:5432/sticker?sslmode=disable"
+  dsn: "postgres://sticker:sticker@postgres-cluster-rw:5432/sticker?sslmode=disable"
 
 ocr:
   engine: "api"
