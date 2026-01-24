@@ -2997,6 +2997,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "qsg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "global-hotkey",
+ "grammers-client",
+ "grammers-session",
+ "grammers-tl-types",
+ "image",
+ "md5",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_yaml",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3641,31 +3666,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "sticker-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "directories",
- "eframe",
- "egui",
- "egui_extras",
- "global-hotkey",
- "grammers-client",
- "grammers-session",
- "grammers-tl-types",
- "image",
- "md5",
- "rand 0.8.5",
- "reqwest",
- "serde",
- "serde_yaml",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
-]
 
 [[package]]
 name = "subtle"
