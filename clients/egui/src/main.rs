@@ -24,15 +24,25 @@ fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
 
-    // Use current working directory
-    let workdir = std::env::current_dir()?;
-    println!("[1/7] Working directory: {:?}", workdir);
+    // Get config directory
+    let config_dir = directories::ProjectDirs::from("", "", "qsg")
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine config directory"))?
+        .config_dir()
+        .to_path_buf();
+
+    // Create config directory if it doesn't exist
+    std::fs::create_dir_all(&config_dir)?;
+
+    println!("[1/7] Config directory: {:?}", config_dir);
 
     // Load config
-    let config_path = workdir.join("config.yaml");
+    let config_path = config_dir.join("config.yaml");
     println!("[2/7] Loading config from: {:?}", config_path);
     let config = Config::load(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to load config {:?}: {}", config_path, e))?;
+
+    // Use config directory as working directory for session files
+    let workdir = config_dir;
 
     println!("Sticker Search GUI (Rust) starting...");
     println!("Press Ctrl+Shift+S to toggle window");
@@ -58,7 +68,10 @@ fn main() -> Result<()> {
     println!("      Loaded {} chats", chats.len());
 
     // Initialize cache
-    let cache_dir = workdir.join(".thumb_cache");
+    let cache_dir = directories::ProjectDirs::from("", "", "qsg")
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine cache directory"))?
+        .cache_dir()
+        .to_path_buf();
     println!("[6/7] Initializing cache at: {:?}", cache_dir);
     let cache = Arc::new(ThumbnailCache::new(cache_dir.clone())
         .map_err(|e| anyhow::anyhow!("Failed to create cache at {:?}: {}", cache_dir, e))?);
