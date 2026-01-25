@@ -18,8 +18,10 @@ type TelegramConfig struct {
 }
 
 type DatabaseConfig struct {
-	Driver string `yaml:"driver"` // "sqlite" or "postgres"
-	DSN    string `yaml:"dsn"`    // connection string or path for sqlite
+	Driver         string `yaml:"driver"`           // "sqlite" or "postgres"
+	DSN            string `yaml:"dsn"`              // connection string or path for sqlite
+	MaxOpenConns   int    `yaml:"max_open_conns"`   // max open connections
+	MaxIdleConns   int    `yaml:"max_idle_conns"`   // max idle connections
 }
 
 type OCRConfig struct {
@@ -51,6 +53,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Database.DSN == "" {
 		cfg.Database.DSN = "stickers.db"
+	}
+	if cfg.Database.MaxOpenConns == 0 {
+		cfg.Database.MaxOpenConns = 25
+	}
+	if cfg.Database.MaxIdleConns == 0 {
+		cfg.Database.MaxIdleConns = 10
 	}
 	if cfg.OCR.Engine == "" {
 		cfg.OCR.Engine = "paddle"

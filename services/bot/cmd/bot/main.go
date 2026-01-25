@@ -83,7 +83,7 @@ func newRepository(cfg config.DatabaseConfig) (repository.Repository, error) {
 	case "sqlite":
 		return sqlite.New(cfg.DSN)
 	case "postgres":
-		return postgres.New(cfg.DSN)
+		return postgres.New(cfg)
 	default:
 		return nil, fmt.Errorf("unknown database driver: %s", cfg.Driver)
 	}
