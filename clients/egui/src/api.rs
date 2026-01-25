@@ -1,6 +1,7 @@
 use anyhow::Result;
 use reqwest::Client;
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::config::ApiConfig;
 use crate::models::Sticker;
@@ -37,7 +38,12 @@ impl From<StickerResponse> for Sticker {
 
 impl Api {
     pub fn new(config: &ApiConfig, user_id: i64) -> Result<Self> {
-        let client = Client::new();
+        let client = Client::builder()
+            .pool_max_idle_per_host(100)                    // Allow more idle connections per host
+            .timeout(Duration::from_secs(30))               // Overall request timeout
+            .connect_timeout(Duration::from_secs(10))       // Connection timeout
+            .build()?;
+
         Ok(Self {
             client,
             base_url: config.url.trim_end_matches('/').to_string(),
