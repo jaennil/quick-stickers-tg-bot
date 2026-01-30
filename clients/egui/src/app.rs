@@ -1,10 +1,13 @@
 use eframe::egui;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
+
+// Limit textures in memory to ~200MB instead of 1.5GB
+const MAX_TEXTURES: usize = 200;
 
 use crate::api::Api;
 use crate::cache::ThumbnailCache;
@@ -38,8 +41,9 @@ pub struct StickerApp {
     grid_state: GridState,
     grid_focused: bool,
 
-    // Thumbnails
+    // Thumbnails (LRU cache)
     textures: HashMap<String, egui::TextureHandle>,
+    texture_order: VecDeque<String>,  // LRU order: front = oldest, back = newest
     loading_thumbs: HashSet<String>,
     thumbnail_loader: ThumbnailLoader,
 
@@ -108,6 +112,7 @@ impl StickerApp {
             grid_state: GridState::new(),
             grid_focused: false,
             textures: HashMap::new(),
+            texture_order: VecDeque::new(),
             loading_thumbs: HashSet::new(),
             thumbnail_loader,
             sticker_loader,
@@ -245,7 +250,16 @@ impl StickerApp {
                             egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()),
                             egui::TextureOptions::LINEAR,
                         );
-                        self.textures.insert(file_id, texture);
+                        self.textures.insert(file_id.clone(), texture);
+                        self.texture_order.push_back(file_id);
+
+                        // LRU eviction: remove oldest textures if over limit
+                        while self.textures.len() > MAX_TEXTURES {
+                            if let Some(old_id) = self.texture_order.pop_front() {
+                                self.textures.remove(&old_id);
+                                debug!("[poll] evicted old texture: {}", &old_id[..20.min(old_id.len())]);
+                            }
+                        }
                     } else {
                         warn!("[poll] failed to decode image: {}", &file_id[..20.min(file_id.len())]);
                     }
