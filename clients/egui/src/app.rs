@@ -77,6 +77,9 @@ pub struct StickerApp {
 
     // Thumbnail size
     thumb_size: f32,
+
+    // Thumbnail cache (for clipboard copy)
+    thumbnail_cache: Arc<ThumbnailCache>,
 }
 
 impl StickerApp {
@@ -96,7 +99,7 @@ impl StickerApp {
         let (send_result_tx, send_result_rx) = mpsc::channel();
 
         // Start services
-        let thumbnail_loader = ThumbnailLoader::start(rt.clone(), api.clone(), cache);
+        let thumbnail_loader = ThumbnailLoader::start(rt.clone(), api.clone(), cache.clone());
         let sticker_loader = StickerLoader::start(rt.clone(), api.clone());
         let chat_detector = ChatDetector::start(chats.clone());
 
@@ -130,6 +133,7 @@ impl StickerApp {
             focus_search: true,
             just_sent: false,
             thumb_size: DEFAULT_THUMB_SIZE,
+            thumbnail_cache: cache,
         }
     }
 
@@ -199,6 +203,65 @@ impl StickerApp {
         });
     }
 
+    fn copy_sticker_to_clipboard(&mut self) {
+        let Some(sticker) = self.stickers.get(self.grid_state.selected) else {
+            warn!("[clipboard] no sticker selected");
+            return;
+        };
+
+        let file_id = &sticker.file_id;
+        let cache_path = self.thumbnail_cache.cache_path(file_id);
+
+        if !cache_path.exists() {
+            warn!("[clipboard] cache file not found for sticker: {}", &file_id[..20.min(file_id.len())]);
+            self.status = "Image not cached yet".into();
+            return;
+        }
+
+        info!("[clipboard] reading sticker from: {:?}", cache_path);
+        match std::fs::read(&cache_path) {
+            Ok(data) => {
+                match image::load_from_memory(&data) {
+                    Ok(img) => {
+                        let rgba = img.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        let img_data = arboard::ImageData {
+                            width: width as usize,
+                            height: height as usize,
+                            bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+                        };
+                        match arboard::Clipboard::new() {
+                            Ok(mut clipboard) => {
+                                match clipboard.set_image(img_data) {
+                                    Ok(_) => {
+                                        info!("[clipboard] copied sticker to clipboard ({}x{})", width, height);
+                                        self.status = "Copied to clipboard!".into();
+                                    }
+                                    Err(e) => {
+                                        warn!("[clipboard] failed to set image: {}", e);
+                                        self.status = format!("Clipboard error: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("[clipboard] failed to open clipboard: {}", e);
+                                self.status = format!("Clipboard error: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[clipboard] failed to decode image: {}", e);
+                        self.status = format!("Decode error: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[clipboard] failed to read cache file: {}", e);
+                self.status = format!("Read error: {}", e);
+            }
+        }
+    }
+
     fn request_thumbnail(&mut self, file_id: &str) {
         if self.textures.contains_key(file_id) || self.loading_thumbs.contains(file_id) {
             return;
@@ -241,6 +304,12 @@ impl StickerApp {
                 ThumbnailResult::Loaded(file_id, data) => {
                     debug!("[poll] thumbnail loaded: {}", &file_id[..20.min(file_id.len())]);
                     self.loading_thumbs.remove(&file_id);
+
+                    // Skip if already loaded (avoid duplicates)
+                    if self.textures.contains_key(&file_id) {
+                        continue;
+                    }
+
                     if let Ok(image) = image::load_from_memory(&data) {
                         let size = [image.width() as _, image.height() as _];
                         let rgba = image.to_rgba8();
@@ -250,16 +319,21 @@ impl StickerApp {
                             egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()),
                             egui::TextureOptions::LINEAR,
                         );
-                        self.textures.insert(file_id.clone(), texture);
-                        self.texture_order.push_back(file_id);
 
-                        // LRU eviction: remove oldest textures if over limit
-                        while self.textures.len() > MAX_TEXTURES {
+                        // LRU eviction BEFORE inserting new texture
+                        while self.textures.len() >= MAX_TEXTURES {
                             if let Some(old_id) = self.texture_order.pop_front() {
-                                self.textures.remove(&old_id);
-                                debug!("[poll] evicted old texture: {}", &old_id[..20.min(old_id.len())]);
+                                if self.textures.remove(&old_id).is_some() {
+                                    debug!("[poll] evicted texture, total: {}", self.textures.len());
+                                    break;
+                                }
+                            } else {
+                                break;
                             }
                         }
+
+                        self.textures.insert(file_id.clone(), texture);
+                        self.texture_order.push_back(file_id);
                     } else {
                         warn!("[poll] failed to decode image: {}", &file_id[..20.min(file_id.len())]);
                     }
@@ -404,8 +478,13 @@ impl eframe::App for StickerAppWithApi {
                 app.just_sent = false;
             }
 
+            // Ctrl+Enter to copy to clipboard
+            if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl) && !app.stickers.is_empty() && !app.just_sent {
+                app.copy_sticker_to_clipboard();
+                app.just_sent = true;
+            }
             // Enter to send
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !app.stickers.is_empty() && !app.just_sent {
+            else if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !app.stickers.is_empty() && !app.just_sent {
                 app.send_sticker();
                 app.just_sent = true;
             }
@@ -446,7 +525,13 @@ impl eframe::App for StickerAppWithApi {
                 app.request_thumbnail(&file_id);
             }
 
-            // Handle click on sticker
+            // Handle Ctrl+Click — copy to clipboard
+            if let Some(idx) = grid_resp.ctrl_clicked {
+                app.grid_state.selected = idx;
+                app.copy_sticker_to_clipboard();
+            }
+
+            // Handle click on sticker — send to Telegram
             if let Some(idx) = grid_resp.clicked {
                 if !app.just_sent {
                     app.grid_state.selected = idx;

@@ -50,6 +50,7 @@ impl GridState {
 
 pub struct GridResponse {
     pub clicked: Option<usize>,
+    pub ctrl_clicked: Option<usize>,
     pub needs_thumbnail: Vec<String>,
 }
 
@@ -62,6 +63,7 @@ pub fn render_grid(
     cols: usize,
 ) -> GridResponse {
     let mut clicked = None;
+    let mut ctrl_clicked = None;
     let mut needs_thumbnail = Vec::new();
 
     egui::ScrollArea::vertical()
@@ -97,7 +99,11 @@ pub fn render_grid(
                         }
 
                         if resp.clicked() {
-                            clicked = Some(*idx);
+                            if ui.input(|i| i.modifiers.ctrl) {
+                                ctrl_clicked = Some(*idx);
+                            } else {
+                                clicked = Some(*idx);
+                            }
                         }
 
                         // End row after cols items
@@ -110,6 +116,7 @@ pub fn render_grid(
 
     GridResponse {
         clicked,
+        ctrl_clicked,
         needs_thumbnail,
     }
 }
