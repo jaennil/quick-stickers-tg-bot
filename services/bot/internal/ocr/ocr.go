@@ -213,11 +213,78 @@ func (o *OCR) getNextKeyIndex() int {
 	return idx
 }
 
+// maxAPIFileSize is the maximum file size for ocr.space API (1MB)
+const maxAPIFileSize int64 = 1024 * 1024
+
+// ensureUnderSizeLimit compresses the image if it exceeds maxBytes using ImageMagick resize.
+// Returns the path to use (original or compressed) and a cleanup function.
+func ensureUnderSizeLimit(ctx context.Context, imagePath string, maxBytes int64) (string, func(), error) {
+	noop := func() {}
+
+	info, err := os.Stat(imagePath)
+	if err != nil {
+		return imagePath, noop, err
+	}
+
+	if info.Size() <= maxBytes {
+		logger.Log.Debugw("[OCR] image within size limit", "size", info.Size(), "limit", maxBytes)
+		return imagePath, noop, nil
+	}
+
+	logger.Log.Infow("[OCR] image exceeds size limit, compressing",
+		"path", imagePath,
+		"size", info.Size(),
+		"limit", maxBytes,
+	)
+
+	compressed, err := os.CreateTemp("", "ocr-compressed-*.png")
+	if err != nil {
+		return imagePath, noop, fmt.Errorf("create temp file: %w", err)
+	}
+	compressed.Close()
+	compressedPath := compressed.Name()
+	cleanup := func() { os.Remove(compressedPath) }
+
+	for _, pct := range []int{75, 50, 25} {
+		cmd := exec.CommandContext(ctx, "convert", imagePath, "-resize", fmt.Sprintf("%d%%", pct), compressedPath)
+		if err := cmd.Run(); err != nil {
+			cleanup()
+			return imagePath, noop, fmt.Errorf("imagemagick resize to %d%%: %w", pct, err)
+		}
+
+		info, err = os.Stat(compressedPath)
+		if err != nil {
+			cleanup()
+			return imagePath, noop, err
+		}
+
+		logger.Log.Debugw("[OCR] compressed image", "resize_percent", pct, "new_size", info.Size())
+
+		if info.Size() <= maxBytes {
+			logger.Log.Infow("[OCR] image compressed successfully",
+				"resize_percent", pct,
+				"new_size", info.Size(),
+			)
+			return compressedPath, cleanup, nil
+		}
+	}
+
+	logger.Log.Warnw("[OCR] image still exceeds limit after max compression", "size", info.Size(), "limit", maxBytes)
+	return compressedPath, cleanup, nil
+}
+
 // tryAPIKey attempts OCR with a single API key
 func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (string, error) {
 	// Маскируем ключ для логов
 	maskedKey := apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	logger.Log.Debugw("[OCR] trying ocr.space API", "key", maskedKey)
+
+	// Сжимаем если > 1MB (ограничение ocr.space)
+	imagePath, cleanup, compressErr := ensureUnderSizeLimit(ctx, imagePath, maxAPIFileSize)
+	if compressErr != nil {
+		logger.Log.Warnw("[OCR] compression failed, using original", "error", compressErr)
+	}
+	defer cleanup()
 
 	// Читаем файл
 	file, err := os.Open(imagePath)
