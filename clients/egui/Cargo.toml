@@ -7,7 +7,7 @@ edition = "2021"
 eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 egui = "0.33"
 egui_extras = { version = "0.33", features = ["image"] }
-tokio = { version = "1", features = ["full", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 grammers-client = "0.7"
 grammers-session = "0.7"
 grammers-tl-types = "0.7"
