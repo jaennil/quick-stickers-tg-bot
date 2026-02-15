@@ -66,13 +66,13 @@ impl TelegramClient {
         print!("Enter phone number: ");
         io::stdout().flush()?;
 
-        let phone = io::stdin().lock().lines().next().unwrap()?;
+        let phone = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
         let token = client.request_login_code(&phone).await?;
 
         print!("Enter code: ");
         io::stdout().flush()?;
 
-        let code = io::stdin().lock().lines().next().unwrap()?;
+        let code = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
 
         match client.sign_in(&token, &code).await {
             Ok(_) => {}
@@ -80,7 +80,7 @@ impl TelegramClient {
                 print!("Enter 2FA password: ");
                 io::stdout().flush()?;
 
-                let password = io::stdin().lock().lines().next().unwrap()?;
+                let password = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
                 client
                     .check_password(password_token, password.trim())
                     .await?;
