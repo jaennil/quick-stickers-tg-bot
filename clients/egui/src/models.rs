@@ -1,11 +1,8 @@
 #[derive(Debug, Clone)]
 pub struct Sticker {
-    pub sticker_id: String,
     pub file_id: String,
     pub document_id: i64,
-    pub text: String,
     pub set_name: String,
-    pub emoji: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +16,6 @@ pub struct ChatInfo {
 pub enum ChatType {
     Private,
     Group,
-    Supergroup,
     Channel,
 }
 
@@ -27,7 +23,7 @@ impl ChatType {
     pub fn icon(&self) -> &'static str {
         match self {
             ChatType::Private => "U",
-            ChatType::Group | ChatType::Supergroup => "G",
+            ChatType::Group => "G",
             ChatType::Channel => "C",
         }
     }

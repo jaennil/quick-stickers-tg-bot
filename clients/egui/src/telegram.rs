@@ -221,14 +221,4 @@ impl TelegramClient {
         Err(anyhow!("Chat not found: {}", chat_id))
     }
 
-    pub async fn download_file(&self, file_id: &str) -> Result<Vec<u8>> {
-        // This is a placeholder - proper implementation requires
-        // decoding the file_id and downloading via get_file
-        // For now, return empty to use DB/disk cache
-        Ok(Vec::new())
-    }
-
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
 }

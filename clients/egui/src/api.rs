@@ -15,23 +15,17 @@ pub struct Api {
 
 #[derive(Debug, Deserialize)]
 struct StickerResponse {
-    sticker_id: String,
     file_id: String,
     document_id: i64,
-    text: String,
     set_name: String,
-    emoji: String,
 }
 
 impl From<StickerResponse> for Sticker {
     fn from(r: StickerResponse) -> Self {
         Sticker {
-            sticker_id: r.sticker_id,
             file_id: r.file_id,
             document_id: r.document_id,
-            text: r.text,
             set_name: r.set_name,
-            emoji: r.emoji,
         }
     }
 }
