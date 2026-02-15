@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let workdir = config_dir;
 
     println!("Sticker Search GUI (Rust) starting...");
-    println!("Press Ctrl+Shift+S to toggle window");
+    println!("Press {} to toggle window", config.hotkey);
 
     // Create tokio runtime
     let rt = Arc::new(Runtime::new()?);
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     // Start hotkey listener
     println!("[7/7] Starting hotkey listener...");
     let (hotkey_tx, hotkey_rx) = mpsc::channel::<HotkeyEvent>();
-    let _hotkey_listener = HotkeyListener::start(hotkey_tx);
+    let _hotkey_listener = HotkeyListener::start(hotkey_tx, &config.hotkey);
 
     println!("Starting GUI...");
     // Disable IME completely
