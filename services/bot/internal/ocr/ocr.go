@@ -24,6 +24,8 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+const maxAPIRetries = 3
+
 // ErrQuotaExceeded is returned when OCR.space API quota is exceeded
 var ErrQuotaExceeded = errors.New("ocr.space quota exceeded")
 
@@ -183,7 +185,29 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 		keyIndex := (startKeyIndex + triedKeys) % len(o.apiKeys)
 		apiKey := o.apiKeys[keyIndex]
 
-		text, err := o.tryAPIKey(ctx, imagePath, apiKey)
+		var text string
+		var err error
+		for attempt := range maxAPIRetries {
+			text, err = o.tryAPIKey(ctx, imagePath, apiKey)
+			if err == nil {
+				return text, nil
+			}
+			if errors.Is(err, ErrQuotaExceeded) {
+				break
+			}
+			if isTransientError(err) {
+				delay := time.Duration(attempt+1) * 2 * time.Second
+				logger.Log.Warnw("[OCR] transient error, retrying", "attempt", attempt+1, "delay", delay, "error", err)
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-time.After(delay):
+				}
+				continue
+			}
+			// Non-transient, non-quota error — stop retrying this key
+			break
+		}
 		if err == nil {
 			return text, nil
 		}
@@ -374,6 +398,18 @@ func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (s
 	logger.Log.Debugw("[OCR] ocr.space success", "key", maskedKey, "duration", time.Since(start), "text_len", len(text))
 
 	return text, nil
+}
+
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "EOF") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no such host") ||
+		strings.Contains(s, "i/o timeout")
 }
 
 func cleanText(text string) string {
