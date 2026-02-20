@@ -52,6 +52,7 @@ func (b *Bot) handlePhoto(ctx context.Context, tgBot *bot.Bot, update *models.Up
 	photoType := service.StickerTypeStatic
 
 	results := make(map[string]string)
+	ocrErrors := make(map[string]error)
 	var resultsMu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -62,10 +63,10 @@ func (b *Bot) handlePhoto(ctx context.Context, tgBot *bot.Bot, update *models.Up
 			text, err := b.indexer.DownloadAndOCRWithType(ctx, fileURL, engineName, photoType)
 			if err != nil {
 				logger.Log.Errorw("OCR error", "engine", engineName, "error", err)
-				text = ""
 			}
 			resultsMu.Lock()
 			results[engineName] = text
+			ocrErrors[engineName] = err
 			resultsMu.Unlock()
 		}(engine.Name)
 	}
@@ -111,8 +112,10 @@ func (b *Bot) handlePhoto(ctx context.Context, tgBot *bot.Bot, update *models.Up
 			buttons = append(buttons, []models.InlineKeyboardButton{
 				{Text: fmt.Sprintf("✓ %s", engine.Label), CallbackData: fmt.Sprintf("selectocr:%s:%s", photo.FileUniqueID, engine.Name)},
 			})
+		} else if err := ocrErrors[engine.Name]; err != nil {
+			msgBuilder.WriteString(fmt.Sprintf("%s:\n⚠️ Ошибка: %s\n\n", engine.Label, err.Error()))
 		} else {
-			msgBuilder.WriteString(fmt.Sprintf("%s:\n(не распознано)\n\n", engine.Label))
+			msgBuilder.WriteString(fmt.Sprintf("%s:\n(текст не найден)\n\n", engine.Label))
 		}
 	}
 
