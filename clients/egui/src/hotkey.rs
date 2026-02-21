@@ -119,3 +119,106 @@ impl HotkeyListener {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_hotkey() {
+        let hk = parse_hotkey("ctrl+shift+s").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_angle_bracket_format() {
+        let hk = parse_hotkey("<ctrl>+<shift>+s").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_mixed_format() {
+        let hk = parse_hotkey("<ctrl>+shift+<s>").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_single_key() {
+        let hk = parse_hotkey("f1").unwrap();
+        let expected = HotKey::new(None, Code::F1);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_all_modifiers() {
+        let hk = parse_hotkey("ctrl+shift+alt+super+a").unwrap();
+        let expected = HotKey::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER),
+            Code::KeyA,
+        );
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_case_insensitive() {
+        let hk = parse_hotkey("CTRL+SHIFT+S").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_with_spaces() {
+        let hk = parse_hotkey("ctrl + shift + s").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_digits() {
+        let hk = parse_hotkey("ctrl+1").unwrap();
+        let expected = HotKey::new(Some(Modifiers::CONTROL), Code::Digit1);
+        assert_eq!(hk.id(), expected.id());
+    }
+
+    #[test]
+    fn parse_special_keys() {
+        assert!(parse_hotkey("ctrl+space").is_some());
+        assert!(parse_hotkey("ctrl+enter").is_some());
+        assert!(parse_hotkey("ctrl+escape").is_some());
+        assert!(parse_hotkey("ctrl+esc").is_some());
+        assert!(parse_hotkey("ctrl+tab").is_some());
+        assert!(parse_hotkey("ctrl+return").is_some());
+    }
+
+    #[test]
+    fn parse_control_alias() {
+        let hk1 = parse_hotkey("ctrl+s").unwrap();
+        let hk2 = parse_hotkey("control+s").unwrap();
+        assert_eq!(hk1.id(), hk2.id());
+    }
+
+    #[test]
+    fn parse_meta_alias() {
+        let hk1 = parse_hotkey("super+s").unwrap();
+        let hk2 = parse_hotkey("meta+s").unwrap();
+        assert_eq!(hk1.id(), hk2.id());
+    }
+
+    #[test]
+    fn parse_unknown_modifier_fails() {
+        assert!(parse_hotkey("hyper+s").is_none());
+    }
+
+    #[test]
+    fn parse_unknown_key_fails() {
+        assert!(parse_hotkey("ctrl+backspace").is_none());
+    }
+
+    #[test]
+    fn parse_empty_fails() {
+        assert!(parse_hotkey("").is_none());
+    }
+}
