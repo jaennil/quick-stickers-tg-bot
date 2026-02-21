@@ -298,8 +298,11 @@ impl StickerApp {
             self.status = format!("Found {} stickers", self.stickers.len());
         }
 
-        // Poll thumbnail results
-        while let Some(result) = self.thumbnail_loader.try_recv() {
+        // Poll thumbnail results (limit per frame to avoid decoding hundreds at once)
+        let mut thumbs_processed = 0;
+        const MAX_THUMBS_PER_FRAME: usize = 10;
+        while thumbs_processed < MAX_THUMBS_PER_FRAME {
+            let Some(result) = self.thumbnail_loader.try_recv() else { break };
             match result {
                 ThumbnailResult::Loaded(file_id, data) => {
                     debug!("[poll] thumbnail loaded: {}", &file_id[..20.min(file_id.len())]);
@@ -343,6 +346,7 @@ impl StickerApp {
                     self.loading_thumbs.remove(&file_id);
                 }
             }
+            thumbs_processed += 1;
         }
 
         // Poll send results
