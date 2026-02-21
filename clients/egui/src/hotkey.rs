@@ -14,8 +14,12 @@ pub struct HotkeyListener {
     _hotkey_id: u32,
 }
 
+fn strip_brackets(s: &str) -> &str {
+    s.trim_start_matches('<').trim_end_matches('>')
+}
+
 fn parse_hotkey(hotkey_str: &str) -> Option<HotKey> {
-    let parts: Vec<&str> = hotkey_str.split('+').map(str::trim).collect();
+    let parts: Vec<&str> = hotkey_str.split('+').map(|s| strip_brackets(s.trim())).collect();
     if parts.is_empty() {
         warn!("[hotkey] empty hotkey string");
         return None;
