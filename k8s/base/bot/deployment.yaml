@@ -17,6 +17,9 @@ spec:
       containers:
         - name: bot
           image: bot
+          env:
+            - name: HTTPS_PROXY
+              value: socks5://127.0.0.1:1080
           ports:
             - containerPort: 8080
               name: metrics
