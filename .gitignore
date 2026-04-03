@@ -30,6 +30,7 @@ sticker-search-bot
 .DS_Store
 Thumbs.db
 CLAUDE.md
+.codex
 
 *.png
 *.webp
