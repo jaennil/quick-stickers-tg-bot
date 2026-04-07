@@ -37,6 +37,7 @@ fn main() -> Result<()> {
 
     // Load config
     let config_path = config_dir.join("config.yaml");
+    let config_path = Config::ensure_file(&config_path)?;
     println!("[2/7] Loading config from: {:?}", config_path);
     let config = Config::load(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to load config {:?}: {}", config_path, e))?;
@@ -57,13 +58,15 @@ fn main() -> Result<()> {
     let api = Arc::new(api);
 
     println!("[4/7] Connecting to Telegram...");
-    let telegram = rt.block_on(async { TelegramClient::connect(&config.telegram, &workdir).await })
+    let telegram = rt
+        .block_on(async { TelegramClient::connect(&config.telegram, &workdir).await })
         .map_err(|e| anyhow::anyhow!("Failed to connect to Telegram: {}", e))?;
     let telegram = Arc::new(telegram);
 
     // Load chats
     println!("[5/7] Loading chats...");
-    let chats = rt.block_on(async { telegram.get_dialogs(50).await })
+    let chats = rt
+        .block_on(async { telegram.get_dialogs(50).await })
         .map_err(|e| anyhow::anyhow!("Failed to load chats: {}", e))?;
     println!("      Loaded {} chats", chats.len());
 
@@ -73,8 +76,10 @@ fn main() -> Result<()> {
         .cache_dir()
         .to_path_buf();
     println!("[6/7] Initializing cache at: {:?}", cache_dir);
-    let cache = Arc::new(ThumbnailCache::new(cache_dir.clone())
-        .map_err(|e| anyhow::anyhow!("Failed to create cache at {:?}: {}", cache_dir, e))?);
+    let cache = Arc::new(
+        ThumbnailCache::new(cache_dir.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to create cache at {:?}: {}", cache_dir, e))?,
+    );
 
     // Start hotkey listener
     println!("[7/7] Starting hotkey listener...");

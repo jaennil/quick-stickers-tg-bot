@@ -31,6 +31,11 @@ cargo build --release
 cargo run --release
 ```
 
+After `make install`, `qsg` stores config in `~/.config/qsg/config.yaml`.
+On first run it will:
+- look for `~/.config/qsg/config.yaml`
+- if it is missing, ask for the required values in the terminal and create the file automatically
+
 ## Configuration
 
 Create `config.yaml`:

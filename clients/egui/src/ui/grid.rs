@@ -44,7 +44,8 @@ impl GridState {
     }
 
     pub fn update_cols(&mut self, available_width: f32, thumb_size: f32) {
-        self.cols = ((available_width + GRID_SPACING) / (thumb_size + GRID_SPACING)).max(1.0) as usize;
+        self.cols =
+            ((available_width + GRID_SPACING) / (thumb_size + GRID_SPACING)).max(1.0) as usize;
     }
 }
 

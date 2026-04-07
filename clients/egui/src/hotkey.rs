@@ -3,7 +3,7 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager,
 };
 use std::sync::mpsc::Sender;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 pub enum HotkeyEvent {
     Toggle,
@@ -19,7 +19,10 @@ fn strip_brackets(s: &str) -> &str {
 }
 
 fn parse_hotkey(hotkey_str: &str) -> Option<HotKey> {
-    let parts: Vec<&str> = hotkey_str.split('+').map(|s| strip_brackets(s.trim())).collect();
+    let parts: Vec<&str> = hotkey_str
+        .split('+')
+        .map(|s| strip_brackets(s.trim()))
+        .collect();
     if parts.is_empty() {
         warn!("[hotkey] empty hotkey string");
         return None;
@@ -42,32 +45,69 @@ fn parse_hotkey(hotkey_str: &str) -> Option<HotKey> {
     }
 
     let code = match key_part.to_lowercase().as_str() {
-        "a" => Code::KeyA, "b" => Code::KeyB, "c" => Code::KeyC,
-        "d" => Code::KeyD, "e" => Code::KeyE, "f" => Code::KeyF,
-        "g" => Code::KeyG, "h" => Code::KeyH, "i" => Code::KeyI,
-        "j" => Code::KeyJ, "k" => Code::KeyK, "l" => Code::KeyL,
-        "m" => Code::KeyM, "n" => Code::KeyN, "o" => Code::KeyO,
-        "p" => Code::KeyP, "q" => Code::KeyQ, "r" => Code::KeyR,
-        "s" => Code::KeyS, "t" => Code::KeyT, "u" => Code::KeyU,
-        "v" => Code::KeyV, "w" => Code::KeyW, "x" => Code::KeyX,
-        "y" => Code::KeyY, "z" => Code::KeyZ,
-        "0" => Code::Digit0, "1" => Code::Digit1, "2" => Code::Digit2,
-        "3" => Code::Digit3, "4" => Code::Digit4, "5" => Code::Digit5,
-        "6" => Code::Digit6, "7" => Code::Digit7, "8" => Code::Digit8,
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
         "9" => Code::Digit9,
-        "space" => Code::Space, "escape" | "esc" => Code::Escape,
-        "enter" | "return" => Code::Enter, "tab" => Code::Tab,
-        "f1" => Code::F1, "f2" => Code::F2, "f3" => Code::F3,
-        "f4" => Code::F4, "f5" => Code::F5, "f6" => Code::F6,
-        "f7" => Code::F7, "f8" => Code::F8, "f9" => Code::F9,
-        "f10" => Code::F10, "f11" => Code::F11, "f12" => Code::F12,
+        "space" => Code::Space,
+        "escape" | "esc" => Code::Escape,
+        "enter" | "return" => Code::Enter,
+        "tab" => Code::Tab,
+        "f1" => Code::F1,
+        "f2" => Code::F2,
+        "f3" => Code::F3,
+        "f4" => Code::F4,
+        "f5" => Code::F5,
+        "f6" => Code::F6,
+        "f7" => Code::F7,
+        "f8" => Code::F8,
+        "f9" => Code::F9,
+        "f10" => Code::F10,
+        "f11" => Code::F11,
+        "f12" => Code::F12,
         unknown => {
             warn!("[hotkey] unknown key: {:?}", unknown);
             return None;
         }
     };
 
-    let mods = if modifiers.is_empty() { None } else { Some(modifiers) };
+    let mods = if modifiers.is_empty() {
+        None
+    } else {
+        Some(modifiers)
+    };
     Some(HotKey::new(mods, code))
 }
 

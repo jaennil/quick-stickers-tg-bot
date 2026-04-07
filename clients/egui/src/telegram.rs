@@ -4,7 +4,7 @@ use grammers_session::Session;
 use grammers_tl_types as tl;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::config::TelegramConfig;
 use crate::models::{ChatInfo, ChatType};
@@ -20,7 +20,11 @@ impl TelegramClient {
         let session_path = workdir.join(SESSION_FILE);
         println!("  [telegram] Session path: {:?}", session_path);
 
-        let session = if session_path.exists() && std::fs::metadata(&session_path).map(|m| m.len() > 0).unwrap_or(false) {
+        let session = if session_path.exists()
+            && std::fs::metadata(&session_path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        {
             println!("  [telegram] Loading existing session...");
             let data = std::fs::read(&session_path)
                 .map_err(|e| anyhow!("Failed to read session from {:?}: {}", session_path, e))?;
@@ -66,13 +70,21 @@ impl TelegramClient {
         print!("Enter phone number: ");
         io::stdout().flush()?;
 
-        let phone = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
+        let phone = io::stdin()
+            .lock()
+            .lines()
+            .next()
+            .ok_or_else(|| anyhow!("no input from stdin"))??;
         let token = client.request_login_code(&phone).await?;
 
         print!("Enter code: ");
         io::stdout().flush()?;
 
-        let code = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
+        let code = io::stdin()
+            .lock()
+            .lines()
+            .next()
+            .ok_or_else(|| anyhow!("no input from stdin"))??;
 
         match client.sign_in(&token, &code).await {
             Ok(_) => {}
@@ -80,7 +92,11 @@ impl TelegramClient {
                 print!("Enter 2FA password: ");
                 io::stdout().flush()?;
 
-                let password = io::stdin().lock().lines().next().ok_or_else(|| anyhow!("no input from stdin"))??;
+                let password = io::stdin()
+                    .lock()
+                    .lines()
+                    .next()
+                    .ok_or_else(|| anyhow!("no input from stdin"))??;
                 client
                     .check_password(password_token, password.trim())
                     .await?;
@@ -125,7 +141,10 @@ impl TelegramClient {
     }
 
     pub async fn send_sticker(&self, chat_id: i64, set_name: &str, document_id: i64) -> Result<()> {
-        info!("[send_sticker] chat_id={}, set_name={}, document_id={}", chat_id, set_name, document_id);
+        info!(
+            "[send_sticker] chat_id={}, set_name={}, document_id={}",
+            chat_id, set_name, document_id
+        );
 
         // Get the chat by ID
         info!("[send_sticker] resolving chat...");
@@ -134,76 +153,105 @@ impl TelegramClient {
 
         // Get sticker set
         info!("[send_sticker] getting sticker set: {}", set_name);
-        let sticker_set = self.client.invoke(&tl::functions::messages::GetStickerSet {
-            stickerset: tl::enums::InputStickerSet::ShortName(tl::types::InputStickerSetShortName {
-                short_name: set_name.to_string(),
-            }),
-            hash: 0,
-        }).await?;
+        let sticker_set = self
+            .client
+            .invoke(&tl::functions::messages::GetStickerSet {
+                stickerset: tl::enums::InputStickerSet::ShortName(
+                    tl::types::InputStickerSetShortName {
+                        short_name: set_name.to_string(),
+                    },
+                ),
+                hash: 0,
+            })
+            .await?;
         info!("[send_sticker] got sticker set");
 
         // Find the sticker in the set
         if let tl::enums::messages::StickerSet::Set(set) = sticker_set {
             let doc_count = set.documents.len();
-            info!("[send_sticker] set has {} documents, looking for document_id={}", doc_count, document_id);
+            info!(
+                "[send_sticker] set has {} documents, looking for document_id={}",
+                doc_count, document_id
+            );
 
             // Log all document IDs in the set
-            let doc_ids: Vec<i64> = set.documents.iter().filter_map(|doc| {
-                if let tl::enums::Document::Document(d) = doc {
-                    Some(d.id)
-                } else {
-                    None
-                }
-            }).collect();
+            let doc_ids: Vec<i64> = set
+                .documents
+                .iter()
+                .filter_map(|doc| {
+                    if let tl::enums::Document::Document(d) = doc {
+                        Some(d.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             info!("[send_sticker] available doc_ids: {:?}", doc_ids);
 
             for doc in set.documents {
                 if let tl::enums::Document::Document(d) = doc {
                     if d.id == document_id {
-                        info!("[send_sticker] found matching sticker (doc_id={}), sending...", d.id);
+                        info!(
+                            "[send_sticker] found matching sticker (doc_id={}), sending...",
+                            d.id
+                        );
                         let input_doc = tl::types::InputDocument {
                             id: d.id,
                             access_hash: d.access_hash,
                             file_reference: d.file_reference.clone(),
                         };
 
-                        self.client.invoke(&tl::functions::messages::SendMedia {
-                            silent: false,
-                            background: false,
-                            clear_draft: false,
-                            noforwards: false,
-                            update_stickersets_order: false,
-                            invert_media: false,
-                            peer: chat.pack().to_input_peer(),
-                            reply_to: None,
-                            media: tl::enums::InputMedia::Document(tl::types::InputMediaDocument {
-                                id: tl::enums::InputDocument::Document(input_doc),
-                                ttl_seconds: None,
-                                query: None,
-                                spoiler: false,
-                            }),
-                            message: String::new(),
-                            random_id: rand::random(),
-                            reply_markup: None,
-                            entities: None,
-                            schedule_date: None,
-                            send_as: None,
-                            quick_reply_shortcut: None,
-                            effect: None,
-                        }).await?;
+                        self.client
+                            .invoke(&tl::functions::messages::SendMedia {
+                                silent: false,
+                                background: false,
+                                clear_draft: false,
+                                noforwards: false,
+                                update_stickersets_order: false,
+                                invert_media: false,
+                                peer: chat.pack().to_input_peer(),
+                                reply_to: None,
+                                media: tl::enums::InputMedia::Document(
+                                    tl::types::InputMediaDocument {
+                                        id: tl::enums::InputDocument::Document(input_doc),
+                                        ttl_seconds: None,
+                                        query: None,
+                                        spoiler: false,
+                                    },
+                                ),
+                                message: String::new(),
+                                random_id: rand::random(),
+                                reply_markup: None,
+                                entities: None,
+                                schedule_date: None,
+                                send_as: None,
+                                quick_reply_shortcut: None,
+                                effect: None,
+                            })
+                            .await?;
 
                         info!("[send_sticker] sent successfully!");
                         return Ok(());
                     }
                 }
             }
-            error!("[send_sticker] sticker not found in {} documents (document_id={})", doc_count, document_id);
+            error!(
+                "[send_sticker] sticker not found in {} documents (document_id={})",
+                doc_count, document_id
+            );
         } else {
             error!("[send_sticker] unexpected sticker set response");
         }
 
-        error!("[send_sticker] failed: sticker not found in set: {} / {}", set_name, document_id);
-        Err(anyhow!("Sticker not found in set: {} / {}", set_name, document_id))
+        error!(
+            "[send_sticker] failed: sticker not found in set: {} / {}",
+            set_name, document_id
+        );
+        Err(anyhow!(
+            "Sticker not found in set: {} / {}",
+            set_name,
+            document_id
+        ))
     }
 
     async fn resolve_chat(&self, chat_id: i64) -> Result<grammers_client::types::Chat> {
@@ -220,5 +268,4 @@ impl TelegramClient {
         error!("[resolve_chat] chat not found: {}", chat_id);
         Err(anyhow!("Chat not found: {}", chat_id))
     }
-
 }

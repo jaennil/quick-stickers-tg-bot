@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
-use tracing::{warn, debug};
+use tracing::{debug, warn};
 
 use crate::config::ApiConfig;
 use crate::models::Sticker;
@@ -37,9 +37,9 @@ impl From<StickerResponse> for Sticker {
 impl Api {
     pub fn new(config: &ApiConfig, user_id: i64) -> Result<Self> {
         let client = Client::builder()
-            .pool_max_idle_per_host(100)                    // Allow more idle connections per host
-            .timeout(Duration::from_secs(30))               // Overall request timeout
-            .connect_timeout(Duration::from_secs(10))       // Connection timeout
+            .pool_max_idle_per_host(100) // Allow more idle connections per host
+            .timeout(Duration::from_secs(30)) // Overall request timeout
+            .connect_timeout(Duration::from_secs(10)) // Connection timeout
             .build()?;
 
         Ok(Self {
@@ -76,11 +76,20 @@ impl Api {
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
                 let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1));
-                warn!("[api] fetch_stickers retry {}/{} after {:?}", attempt, MAX_RETRIES, backoff);
+                warn!(
+                    "[api] fetch_stickers retry {}/{} after {:?}",
+                    attempt, MAX_RETRIES, backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
-            match self.client.get(url).header("X-API-Key", &self.api_key).send().await {
+            match self
+                .client
+                .get(url)
+                .header("X-API-Key", &self.api_key)
+                .send()
+                .await
+            {
                 Ok(response) => {
                     if !response.status().is_success() {
                         let status = response.status();
@@ -116,11 +125,20 @@ impl Api {
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
                 let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1));
-                warn!("[api] get_thumbnail retry {}/{} after {:?}", attempt, MAX_RETRIES, backoff);
+                warn!(
+                    "[api] get_thumbnail retry {}/{} after {:?}",
+                    attempt, MAX_RETRIES, backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
-            match self.client.get(&url).header("X-API-Key", &self.api_key).send().await {
+            match self
+                .client
+                .get(&url)
+                .header("X-API-Key", &self.api_key)
+                .send()
+                .await
+            {
                 Ok(response) => {
                     if response.status().as_u16() == 404 {
                         return Ok(None);

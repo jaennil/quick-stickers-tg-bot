@@ -23,9 +23,8 @@ pub fn render_search_bar(ui: &mut egui::Ui, query: &mut String) -> SearchRespons
 pub fn render_size_slider(ui: &mut egui::Ui, thumb_size: &mut f32) {
     ui.horizontal(|ui| {
         ui.label("Size:");
-        let slider = ui.add(
-            egui::Slider::new(thumb_size, MIN_THUMB_SIZE..=MAX_THUMB_SIZE).show_value(false),
-        );
+        let slider = ui
+            .add(egui::Slider::new(thumb_size, MIN_THUMB_SIZE..=MAX_THUMB_SIZE).show_value(false));
         // Prevent keyboard focus on slider
         if slider.has_focus() {
             slider.surrender_focus();

@@ -57,10 +57,7 @@ fn detect_telegram_chat() -> Option<String> {
         .output()
         .ok()?;
 
-    let ids: Vec<&str> = std::str::from_utf8(&output.stdout)
-        .ok()?
-        .lines()
-        .collect();
+    let ids: Vec<&str> = std::str::from_utf8(&output.stdout).ok()?.lines().collect();
 
     for id in ids {
         let name_output = Command::new("xdotool")

@@ -13,13 +13,13 @@ use crate::api::Api;
 use crate::cache::ThumbnailCache;
 use crate::hotkey::HotkeyEvent;
 use crate::models::{ChatInfo, Sticker};
-use crate::services::{ChatDetector, StickerLoader, ThumbnailLoader};
 use crate::services::sticker_loader::StickerLoadResult;
 use crate::services::thumbnail_loader::ThumbnailResult;
+use crate::services::{ChatDetector, StickerLoader, ThumbnailLoader};
 use crate::telegram::TelegramClient;
+use crate::ui::chat_selector::render_chat_selector;
 use crate::ui::grid::{handle_grid_navigation, render_grid, GridState};
 use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
-use crate::ui::chat_selector::render_chat_selector;
 use crate::ui::theme::{
     apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_TEXT,
 };
@@ -43,7 +43,7 @@ pub struct StickerApp {
 
     // Thumbnails (LRU cache)
     textures: HashMap<String, egui::TextureHandle>,
-    texture_order: VecDeque<String>,  // LRU order: front = oldest, back = newest
+    texture_order: VecDeque<String>, // LRU order: front = oldest, back = newest
     loading_thumbs: HashSet<String>,
     thumbnail_loader: ThumbnailLoader,
 
@@ -182,7 +182,10 @@ impl StickerApp {
         let chat_name = chat.name.clone();
         let tx = self.send_result_tx.clone();
 
-        info!("[send] sending sticker {} to chat {}", document_id, chat_name);
+        info!(
+            "[send] sending sticker {} to chat {}",
+            document_id, chat_name
+        );
         self.status = "Sending...".into();
 
         self.rt.spawn(async move {
@@ -213,48 +216,50 @@ impl StickerApp {
         let cache_path = self.thumbnail_cache.cache_path(file_id);
 
         if !cache_path.exists() {
-            warn!("[clipboard] cache file not found for sticker: {}", &file_id[..20.min(file_id.len())]);
+            warn!(
+                "[clipboard] cache file not found for sticker: {}",
+                &file_id[..20.min(file_id.len())]
+            );
             self.status = "Image not cached yet".into();
             return;
         }
 
         info!("[clipboard] reading sticker from: {:?}", cache_path);
         match std::fs::read(&cache_path) {
-            Ok(data) => {
-                match image::load_from_memory(&data) {
-                    Ok(img) => {
-                        let rgba = img.to_rgba8();
-                        let (width, height) = rgba.dimensions();
-                        let img_data = arboard::ImageData {
-                            width: width as usize,
-                            height: height as usize,
-                            bytes: std::borrow::Cow::Owned(rgba.into_raw()),
-                        };
-                        match arboard::Clipboard::new() {
-                            Ok(mut clipboard) => {
-                                match clipboard.set_image(img_data) {
-                                    Ok(_) => {
-                                        info!("[clipboard] copied sticker to clipboard ({}x{})", width, height);
-                                        self.status = "Copied to clipboard!".into();
-                                    }
-                                    Err(e) => {
-                                        warn!("[clipboard] failed to set image: {}", e);
-                                        self.status = format!("Clipboard error: {}", e);
-                                    }
-                                }
+            Ok(data) => match image::load_from_memory(&data) {
+                Ok(img) => {
+                    let rgba = img.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    let img_data = arboard::ImageData {
+                        width: width as usize,
+                        height: height as usize,
+                        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+                    };
+                    match arboard::Clipboard::new() {
+                        Ok(mut clipboard) => match clipboard.set_image(img_data) {
+                            Ok(_) => {
+                                info!(
+                                    "[clipboard] copied sticker to clipboard ({}x{})",
+                                    width, height
+                                );
+                                self.status = "Copied to clipboard!".into();
                             }
                             Err(e) => {
-                                warn!("[clipboard] failed to open clipboard: {}", e);
+                                warn!("[clipboard] failed to set image: {}", e);
                                 self.status = format!("Clipboard error: {}", e);
                             }
+                        },
+                        Err(e) => {
+                            warn!("[clipboard] failed to open clipboard: {}", e);
+                            self.status = format!("Clipboard error: {}", e);
                         }
                     }
-                    Err(e) => {
-                        warn!("[clipboard] failed to decode image: {}", e);
-                        self.status = format!("Decode error: {}", e);
-                    }
                 }
-            }
+                Err(e) => {
+                    warn!("[clipboard] failed to decode image: {}", e);
+                    self.status = format!("Decode error: {}", e);
+                }
+            },
             Err(e) => {
                 warn!("[clipboard] failed to read cache file: {}", e);
                 self.status = format!("Read error: {}", e);
@@ -283,7 +288,10 @@ impl StickerApp {
                     }
                 }
                 StickerLoadResult::Done => {
-                    info!("[poll] sticker loading complete: {} total", self.stickers.len());
+                    info!(
+                        "[poll] sticker loading complete: {} total",
+                        self.stickers.len()
+                    );
                     self.is_loading_all = false;
                     self.status = format!("{} stickers", self.stickers.len());
                 }
@@ -302,10 +310,15 @@ impl StickerApp {
         let mut thumbs_processed = 0;
         const MAX_THUMBS_PER_FRAME: usize = 10;
         while thumbs_processed < MAX_THUMBS_PER_FRAME {
-            let Some(result) = self.thumbnail_loader.try_recv() else { break };
+            let Some(result) = self.thumbnail_loader.try_recv() else {
+                break;
+            };
             match result {
                 ThumbnailResult::Loaded(file_id, data) => {
-                    debug!("[poll] thumbnail loaded: {}", &file_id[..20.min(file_id.len())]);
+                    debug!(
+                        "[poll] thumbnail loaded: {}",
+                        &file_id[..20.min(file_id.len())]
+                    );
                     self.loading_thumbs.remove(&file_id);
 
                     // Skip if already loaded (avoid duplicates)
@@ -327,7 +340,10 @@ impl StickerApp {
                         while self.textures.len() >= MAX_TEXTURES {
                             if let Some(old_id) = self.texture_order.pop_front() {
                                 if self.textures.remove(&old_id).is_some() {
-                                    debug!("[poll] evicted texture, total: {}", self.textures.len());
+                                    debug!(
+                                        "[poll] evicted texture, total: {}",
+                                        self.textures.len()
+                                    );
                                     break;
                                 }
                             } else {
@@ -338,11 +354,17 @@ impl StickerApp {
                         self.textures.insert(file_id.clone(), texture);
                         self.texture_order.push_back(file_id);
                     } else {
-                        warn!("[poll] failed to decode image: {}", &file_id[..20.min(file_id.len())]);
+                        warn!(
+                            "[poll] failed to decode image: {}",
+                            &file_id[..20.min(file_id.len())]
+                        );
                     }
                 }
                 ThumbnailResult::NotFound(file_id) => {
-                    debug!("[poll] thumbnail not found: {}", &file_id[..20.min(file_id.len())]);
+                    debug!(
+                        "[poll] thumbnail not found: {}",
+                        &file_id[..20.min(file_id.len())]
+                    );
                     self.loading_thumbs.remove(&file_id);
                 }
             }
@@ -483,12 +505,18 @@ impl eframe::App for StickerAppWithApi {
             }
 
             // Ctrl+Enter to copy to clipboard
-            if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl) && !app.stickers.is_empty() && !app.just_sent {
+            if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl)
+                && !app.stickers.is_empty()
+                && !app.just_sent
+            {
                 app.copy_sticker_to_clipboard();
                 app.just_sent = true;
             }
             // Enter to send
-            else if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !app.stickers.is_empty() && !app.just_sent {
+            else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && !app.stickers.is_empty()
+                && !app.just_sent
+            {
                 app.send_sticker();
                 app.just_sent = true;
             }
@@ -499,10 +527,16 @@ impl eframe::App for StickerAppWithApi {
             ui.add_space(4.0);
 
             // Update grid columns
-            app.grid_state.update_cols(ui.available_width(), app.thumb_size);
+            app.grid_state
+                .update_cols(ui.available_width(), app.thumb_size);
 
             // Grid navigation
-            handle_grid_navigation(ui, &mut app.grid_state, app.stickers.len(), app.grid_focused);
+            handle_grid_navigation(
+                ui,
+                &mut app.grid_state,
+                app.stickers.len(),
+                app.grid_focused,
+            );
 
             ui.add_space(8.0);
 

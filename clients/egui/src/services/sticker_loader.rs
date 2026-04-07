@@ -43,7 +43,10 @@ impl StickerLoader {
                         );
 
                         if count == 0 {
-                            info!("[sticker_loader] all stickers loaded: {} total", total_loaded);
+                            info!(
+                                "[sticker_loader] all stickers loaded: {} total",
+                                total_loaded
+                            );
                             if result_tx.send(StickerLoadResult::Done).is_err() {
                                 warn!("[sticker_loader] result channel closed");
                             }
