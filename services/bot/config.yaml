@@ -8,7 +8,7 @@ database:
 ocr:
   engine: "api"
   server_url: "http://ocr:8765"  # local OCR server URL (use Docker service name in Docker)
-  proxy_url: "socks5://localhost:1080"  # SOCKS5 proxy via xray sidecar
+  proxy_url: "socks5://xray.proxy.svc.cluster.local:1080"  # shared SOCKS5 proxy from homelab-infra
   space_api_keys:
   - "K81763554688957"
   - "K84899834788957"

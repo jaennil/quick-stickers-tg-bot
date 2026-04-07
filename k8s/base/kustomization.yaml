@@ -10,6 +10,5 @@ resources:
   - api/deployment.yaml
   - api/service.yaml
   - postgres/cluster.yaml
-  - xray-configmap.yaml
   - servicemonitor.yaml
   - dashboard.yaml

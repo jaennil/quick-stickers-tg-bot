@@ -8,7 +8,7 @@ database:
 ocr:
   engine: "api"
   server_url: "http://ocr:8765"  # local OCR server URL (use Docker service name in Docker)
-  proxy_url: "socks5://host.docker.internal:2080"  # optional: SOCKS5 or HTTP proxy for ocr.space (use host.docker.internal in Docker)
+  proxy_url: "socks5://xray.proxy.svc.cluster.local:1080"  # in Kubernetes use shared xray service; for Docker use host.docker.internal:2080
   space_api_keys:
   - "K81763554688957"
   - "K84899834788957"

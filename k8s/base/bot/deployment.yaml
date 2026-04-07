@@ -19,7 +19,7 @@ spec:
           image: bot
           env:
             - name: HTTPS_PROXY
-              value: socks5://127.0.0.1:1080
+              value: socks5://xray.proxy.svc.cluster.local:1080
           ports:
             - containerPort: 8080
               name: metrics
@@ -34,24 +34,7 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
-        - name: xray
-          image: xray
-          args: ["xray", "run", "-c", "/etc/xray/config.json"]
-          volumeMounts:
-            - name: xray-config
-              mountPath: /etc/xray/config.json
-              subPath: config.json
-          resources:
-            requests:
-              memory: "32Mi"
-              cpu: "10m"
-            limits:
-              memory: "128Mi"
-              cpu: "100m"
       volumes:
         - name: config
           secret:
             secretName: bot-config
-        - name: xray-config
-          configMap:
-            name: xray-config
