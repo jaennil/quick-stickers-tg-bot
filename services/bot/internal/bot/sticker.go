@@ -100,6 +100,49 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		"is_video", sticker.IsVideo,
 	)
 
+	existing, err := b.repo.GetSticker(userID, sticker.FileUniqueID)
+	if err != nil {
+		logger.Log.Errorw("[STICKER] failed to check existing sticker",
+			"sticker", sticker.FileUniqueID,
+			"user", userID,
+			"error", err,
+		)
+	} else if existing != nil {
+		logger.Log.Infow("[STICKER] duplicate sticker detected",
+			"sticker", sticker.FileUniqueID,
+			"user", userID,
+			"manual_edit", existing.ManualEdit,
+			"ocr_engine", existing.OCREngine,
+		)
+
+		b.state.SetLastSticker(userID, sticker.FileUniqueID)
+		b.state.SetAwaitingMode(userID, state.ModeEdit)
+
+		infoLine := "ℹ️ Текст ещё не задан."
+		if existing.Text != "" {
+			infoLine = fmt.Sprintf("📝 Текущий текст: \"%s\"", existing.Text)
+		}
+		if existing.ManualEdit {
+			infoLine += "\nИсточник: ручное изменение"
+		} else if existing.OCREngine != "" {
+			infoLine += fmt.Sprintf("\nИсточник: %s", constants.GetEngineLabel(existing.OCREngine))
+		}
+
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text: "♻️ Этот стикер уже есть в базе.\n" +
+				"OCR повторно не запускаю.\n\n" +
+				infoLine +
+				"\n\nОтправь новый текст следующим сообщением.",
+			ReplyMarkup: &models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{
+					ui.EditStickerButton(sticker.FileUniqueID),
+				},
+			},
+		})
+		return
+	}
+
 	progressMsg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "Распознаю текст...",

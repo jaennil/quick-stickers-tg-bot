@@ -97,6 +97,27 @@ func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 	return err
 }
 
+func (r *BaseRepository) GetSticker(userID int64, stickerID string) (*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT ` + stickerSelectFields + `
+		FROM stickers
+		WHERE user_id = ? AND sticker_id = ?
+		LIMIT 1
+	`)
+
+	row := r.db.QueryRow(query, userID, stickerID)
+
+	var st Sticker
+	if err := row.Scan(&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID, &st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit, &st.IsAnimated, &st.IsVideo, &st.MediaType); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &st, nil
+}
+
 func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, error) {
 	queryLower := strings.ToLower(query)
 	sqlQuery := r.db.Rebind(`

@@ -24,18 +24,19 @@ type Sticker struct {
 }
 
 type PackStats struct {
-	SetName       string
-	Total         int
-	ByAPI         int
-	ByPaddle      int
-	ByEasy        int
-	ByTesseract   int
-	ManualEdited  int
+	SetName      string
+	Total        int
+	ByAPI        int
+	ByPaddle     int
+	ByEasy       int
+	ByTesseract  int
+	ManualEdited int
 }
 
 type Repository interface {
 	// Stickers
 	SaveSticker(sticker *Sticker) error
+	GetSticker(userID int64, stickerID string) (*Sticker, error)
 	SearchByText(userID int64, query string) ([]*Sticker, error)
 	GetUserStickerCount(userID int64) (int, error)
 	GetUserStickers(userID int64, limit, offset int) ([]*Sticker, error)
