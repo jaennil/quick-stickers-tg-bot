@@ -18,16 +18,6 @@ impl Sticker {
             &self.set_name
         }
     }
-
-    pub fn source_label(&self) -> &str {
-        if self.manual_edit {
-            "manual"
-        } else if self.ocr_engine.is_empty() {
-            "unknown"
-        } else {
-            &self.ocr_engine
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

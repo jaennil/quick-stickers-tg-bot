@@ -617,6 +617,8 @@ impl StickerApp {
         while let Ok(stickers) = self.search_rx.try_recv() {
             debug!("[poll] received {} stickers from search", stickers.len());
             self.search_results = Some(stickers);
+            self.selected_sticker_id = None;
+            self.grid_state.selected = 0;
             self.rebuild_stickers();
             self.status = self.default_status();
         }
@@ -791,11 +793,6 @@ impl eframe::App for StickerApp {
         let visible_total = self.stickers.len();
         let pack_total = self.pack_options.len();
         let manual_edit_total = self.manual_edit_count;
-        let selected_position = if self.stickers.is_empty() {
-            0
-        } else {
-            self.grid_state.selected + 1
-        };
 
         let mut apply_pack_filter: Option<Option<String>> = None;
         let mut search_changed = false;
@@ -933,24 +930,11 @@ impl eframe::App for StickerApp {
                     ui.label(format!("Pack: {}", sticker.pack_label()));
                     ui.label(format!("Pack stickers: {}", selected_pack_count));
                     ui.label(format!(
-                        "Visible position: {}/{}",
-                        selected_position, visible_total
-                    ));
-                    ui.label(format!(
                         "Emoji: {}",
                         if sticker.emoji.is_empty() {
                             "-"
                         } else {
                             &sticker.emoji
-                        }
-                    ));
-                    ui.label(format!("Source: {}", sticker.source_label()));
-                    ui.label(format!(
-                        "Sticker ID: {}",
-                        if sticker.sticker_id.len() > 24 {
-                            &sticker.sticker_id[..24]
-                        } else {
-                            &sticker.sticker_id
                         }
                     ));
 
