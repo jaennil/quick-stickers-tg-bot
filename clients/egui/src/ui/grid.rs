@@ -68,22 +68,30 @@ pub fn render_grid(
     let mut ctrl_clicked = None;
     let mut needs_thumbnail = Vec::new();
     let mut visible_file_ids = Vec::new();
+    let cols = cols.max(1);
+    let total_rows = file_ids.len().div_ceil(cols);
+    let row_height = thumb_size + GRID_SPACING;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::Grid::new("sticker_grid")
-                .spacing([GRID_SPACING, GRID_SPACING])
-                .show(ui, |ui| {
-                    for (idx, file_id) in file_ids {
+        .show_rows(ui, row_height, total_rows, |ui, row_range| {
+            for row in row_range {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GRID_SPACING;
+
+                    for col in 0..cols {
+                        let item_index = row * cols + col;
+                        if item_index >= file_ids.len() {
+                            break;
+                        }
+
+                        let (idx, file_id) = &file_ids[item_index];
                         let is_selected = *idx == selected;
                         let (rect, resp) = ui.allocate_exact_size(
                             egui::vec2(thumb_size, thumb_size),
                             egui::Sense::click(),
                         );
-                        let is_visible = ui.clip_rect().intersects(rect);
 
-                        // Background color based on state
                         let bg = if is_selected {
                             CELL_SELECTED
                         } else if resp.hovered() {
@@ -94,17 +102,12 @@ pub fn render_grid(
 
                         ui.painter().rect_filled(rect, CELL_ROUNDING, bg);
 
-                        // Render texture or placeholder
                         if let Some(tex) = textures.get(file_id) {
                             render_texture(ui, tex, rect, thumb_size);
-                            if is_visible {
-                                visible_file_ids.push(file_id.clone());
-                            }
+                            visible_file_ids.push(file_id.clone());
                         } else {
                             render_placeholder(ui, rect);
-                            if is_visible {
-                                needs_thumbnail.push(file_id.clone());
-                            }
+                            needs_thumbnail.push(file_id.clone());
                         }
 
                         if resp.clicked() {
@@ -114,13 +117,9 @@ pub fn render_grid(
                                 clicked = Some(*idx);
                             }
                         }
-
-                        // End row after cols items
-                        if (*idx + 1) % cols == 0 {
-                            ui.end_row();
-                        }
                     }
                 });
+            }
         });
 
     GridResponse {
