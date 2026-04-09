@@ -67,6 +67,7 @@ pub fn render_grid(
     selected: usize,
     thumb_size: f32,
     cols: usize,
+    scroll_to_selected: bool,
 ) -> GridResponse {
     let mut clicked = None;
     let mut double_clicked = None;
@@ -108,6 +109,10 @@ pub fn render_grid(
                         } else {
                             CELL_DEFAULT
                         };
+
+                        if is_selected && scroll_to_selected {
+                            ui.scroll_to_rect(rect.expand(GRID_SPACING), None);
+                        }
 
                         ui.painter().rect_filled(rect, CELL_ROUNDING, bg);
 
@@ -200,10 +205,12 @@ pub fn handle_grid_navigation(
     grid_state: &mut GridState,
     count: usize,
     grid_focused: bool,
-) {
+) -> bool {
     if !grid_focused || count == 0 {
-        return;
+        return false;
     }
+
+    let previous = grid_state.selected;
 
     if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
         grid_state.navigate_left();
@@ -217,4 +224,6 @@ pub fn handle_grid_navigation(
     if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
         grid_state.navigate_down(count);
     }
+
+    grid_state.selected != previous
 }

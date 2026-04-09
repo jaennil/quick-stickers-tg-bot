@@ -1111,7 +1111,7 @@ impl eframe::App for StickerApp {
             self.grid_state
                 .update_cols(ui.available_width(), self.thumb_size);
 
-            handle_grid_navigation(
+            let navigated_with_keyboard = handle_grid_navigation(
                 ui,
                 &mut self.grid_state,
                 self.stickers.len(),
@@ -1133,6 +1133,7 @@ impl eframe::App for StickerApp {
                 self.grid_state.selected,
                 self.thumb_size,
                 self.grid_state.cols,
+                navigated_with_keyboard,
             );
 
             for file_id in grid_resp.needs_thumbnail {
