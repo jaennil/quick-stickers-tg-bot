@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui::{self, TextureHandle};
 
 use super::theme::{
     CELL_DEFAULT, CELL_HOVERED, CELL_PADDING, CELL_ROUNDING, CELL_SELECTED, GRID_SPACING,
 };
+
+const PREFETCH_ROWS: usize = 3;
 
 pub struct GridState {
     pub selected: usize,
@@ -54,6 +56,7 @@ pub struct GridResponse {
     pub double_clicked: Option<usize>,
     pub ctrl_clicked: Option<usize>,
     pub needs_thumbnail: Vec<String>,
+    pub prefetch_thumbnails: Vec<String>,
     pub visible_file_ids: Vec<String>,
 }
 
@@ -69,14 +72,18 @@ pub fn render_grid(
     let mut double_clicked = None;
     let mut ctrl_clicked = None;
     let mut needs_thumbnail = Vec::new();
+    let mut prefetch_thumbnails = Vec::new();
     let mut visible_file_ids = Vec::new();
     let cols = cols.max(1);
     let total_rows = file_ids.len().div_ceil(cols);
     let row_height = thumb_size + GRID_SPACING;
+    let mut rendered_rows = None;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, row_height, total_rows, |ui, row_range| {
+            rendered_rows = Some(row_range.clone());
+
             for row in row_range {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GRID_SPACING;
@@ -128,11 +135,37 @@ pub fn render_grid(
             }
         });
 
+    if let Some(row_range) = rendered_rows {
+        let prefetch_start = row_range.start.saturating_sub(PREFETCH_ROWS);
+        let prefetch_end = (row_range.end + PREFETCH_ROWS).min(total_rows);
+        let mut queued = HashSet::new();
+
+        queued.extend(needs_thumbnail.iter().cloned());
+
+        for row in prefetch_start..prefetch_end {
+            for col in 0..cols {
+                let item_index = row * cols + col;
+                if item_index >= file_ids.len() {
+                    break;
+                }
+
+                let (_, file_id) = &file_ids[item_index];
+                if textures.contains_key(file_id) || queued.contains(file_id) {
+                    continue;
+                }
+
+                queued.insert(file_id.clone());
+                prefetch_thumbnails.push(file_id.clone());
+            }
+        }
+    }
+
     GridResponse {
         clicked,
         double_clicked,
         ctrl_clicked,
         needs_thumbnail,
+        prefetch_thumbnails,
         visible_file_ids,
     }
 }

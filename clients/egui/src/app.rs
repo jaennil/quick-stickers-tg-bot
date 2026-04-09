@@ -8,6 +8,14 @@ use tracing::{debug, info, warn};
 
 // Limit textures in memory to ~200MB instead of 1.5GB
 const MAX_TEXTURES: usize = 200;
+const MIN_WINDOW_WIDTH: f32 = 760.0;
+const MIN_WINDOW_HEIGHT: f32 = 560.0;
+const MAX_WINDOW_WIDTH: f32 = 1800.0;
+const MAX_WINDOW_HEIGHT: f32 = 1100.0;
+const TARGET_WINDOW_WIDTH_RATIO: f32 = 0.78;
+const TARGET_WINDOW_HEIGHT_RATIO: f32 = 0.82;
+const MAX_MONITOR_WIDTH_RATIO: f32 = 0.94;
+const MAX_MONITOR_HEIGHT_RATIO: f32 = 0.92;
 
 use crate::api::Api;
 use crate::cache::ThumbnailCache;
@@ -118,6 +126,9 @@ pub struct StickerApp {
 
     // Thumbnail cache (for clipboard copy)
     thumbnail_cache: Arc<ThumbnailCache>,
+
+    // Window sizing
+    window_sized_for_monitor: Option<egui::Vec2>,
 }
 
 impl StickerApp {
@@ -189,7 +200,85 @@ impl StickerApp {
             just_sent: false,
             thumb_size: DEFAULT_THUMB_SIZE,
             thumbnail_cache: cache,
+            window_sized_for_monitor: None,
         }
+    }
+
+    fn desired_window_axis(
+        monitor_axis: f32,
+        target_ratio: f32,
+        min_axis: f32,
+        max_axis: f32,
+        max_monitor_ratio: f32,
+    ) -> f32 {
+        let available = (monitor_axis * max_monitor_ratio).max(320.0);
+        let min_axis = min_axis.min(available);
+        (monitor_axis * target_ratio)
+            .min(max_axis)
+            .clamp(min_axis, available)
+    }
+
+    fn desired_window_size(monitor_size: egui::Vec2) -> egui::Vec2 {
+        egui::vec2(
+            Self::desired_window_axis(
+                monitor_size.x,
+                TARGET_WINDOW_WIDTH_RATIO,
+                MIN_WINDOW_WIDTH,
+                MAX_WINDOW_WIDTH,
+                MAX_MONITOR_WIDTH_RATIO,
+            ),
+            Self::desired_window_axis(
+                monitor_size.y,
+                TARGET_WINDOW_HEIGHT_RATIO,
+                MIN_WINDOW_HEIGHT,
+                MAX_WINDOW_HEIGHT,
+                MAX_MONITOR_HEIGHT_RATIO,
+            ),
+        )
+    }
+
+    fn min_window_size(monitor_size: egui::Vec2) -> egui::Vec2 {
+        egui::vec2(
+            MIN_WINDOW_WIDTH.min((monitor_size.x * MAX_MONITOR_WIDTH_RATIO).max(480.0)),
+            MIN_WINDOW_HEIGHT.min((monitor_size.y * MAX_MONITOR_HEIGHT_RATIO).max(420.0)),
+        )
+    }
+
+    fn max_window_size(monitor_size: egui::Vec2) -> egui::Vec2 {
+        egui::vec2(
+            (monitor_size.x * MAX_MONITOR_WIDTH_RATIO).max(480.0),
+            (monitor_size.y * MAX_MONITOR_HEIGHT_RATIO).max(420.0),
+        )
+    }
+
+    fn sync_window_size(&mut self, ctx: &egui::Context) {
+        let monitor_size = ctx.input(|i| i.viewport().monitor_size);
+        let Some(monitor_size) = monitor_size.filter(|size| size.x > 1.0 && size.y > 1.0) else {
+            return;
+        };
+
+        let monitor_changed = self
+            .window_sized_for_monitor
+            .map(|prev| {
+                (prev.x - monitor_size.x).abs() > 1.0 || (prev.y - monitor_size.y).abs() > 1.0
+            })
+            .unwrap_or(true);
+
+        if !monitor_changed {
+            return;
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Self::min_window_size(
+            monitor_size,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(Self::max_window_size(
+            monitor_size,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Self::desired_window_size(
+            monitor_size,
+        )));
+
+        self.window_sized_for_monitor = Some(monitor_size);
     }
 
     fn trigger_search(&mut self) {
@@ -740,6 +829,7 @@ impl eframe::App for StickerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll all async results
         self.poll_all(ctx);
+        self.sync_window_size(ctx);
 
         // Check search debounce
         if let Some(start) = self.search_debounce {
@@ -1018,8 +1108,6 @@ impl eframe::App for StickerApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.set_min_size(egui::vec2(720.0, 650.0));
-
             self.grid_state
                 .update_cols(ui.available_width(), self.thumb_size);
 
@@ -1048,6 +1136,10 @@ impl eframe::App for StickerApp {
             );
 
             for file_id in grid_resp.needs_thumbnail {
+                self.request_thumbnail(&file_id);
+            }
+
+            for file_id in grid_resp.prefetch_thumbnails {
                 self.request_thumbnail(&file_id);
             }
 
