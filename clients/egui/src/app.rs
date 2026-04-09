@@ -796,6 +796,7 @@ impl eframe::App for StickerApp {
 
         let mut apply_pack_filter: Option<Option<String>> = None;
         let mut search_changed = false;
+        let mut search_has_focus = false;
         let mut editor_has_focus = false;
         let mut details_send = false;
         let mut details_copy = false;
@@ -819,6 +820,8 @@ impl eframe::App for StickerApp {
                     search_changed = true;
                     self.grid_focused = false;
                 }
+
+                search_has_focus = search_resp.has_focus;
 
                 handle_focus(
                     ui,
@@ -1117,16 +1120,16 @@ impl eframe::App for StickerApp {
             self.just_sent = false;
         }
 
-        let ctrl_enter = ctx.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl);
+        let copy_key = ctx.input(|i| i.key_pressed(egui::Key::C));
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
         let ctrl_s = ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.ctrl);
+        let text_input_focused = editor_has_focus || search_has_focus;
 
         if ctrl_s && editor_has_focus {
             self.save_current_text();
-        } else if ctrl_enter && !self.stickers.is_empty() && !self.just_sent && !editor_has_focus {
+        } else if copy_key && !self.stickers.is_empty() && !text_input_focused {
             self.copy_sticker_to_clipboard();
-            self.just_sent = true;
-        } else if enter && !self.stickers.is_empty() && !self.just_sent && !editor_has_focus {
+        } else if enter && !self.stickers.is_empty() && !self.just_sent && !text_input_focused {
             self.send_sticker();
             self.just_sent = true;
         }

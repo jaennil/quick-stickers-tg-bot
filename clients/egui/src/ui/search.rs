@@ -5,6 +5,7 @@ use super::theme::{MAX_THUMB_SIZE, MIN_THUMB_SIZE};
 pub struct SearchResponse {
     pub changed: bool,
     pub id: egui::Id,
+    pub has_focus: bool,
 }
 
 pub fn render_search_bar(ui: &mut egui::Ui, query: &mut String) -> SearchResponse {
@@ -18,6 +19,7 @@ pub fn render_search_bar(ui: &mut egui::Ui, query: &mut String) -> SearchRespons
     SearchResponse {
         changed: response.changed(),
         id: response.id,
+        has_focus: response.has_focus(),
     }
 }
 
