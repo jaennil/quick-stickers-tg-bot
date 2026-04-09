@@ -51,6 +51,7 @@ impl GridState {
 
 pub struct GridResponse {
     pub clicked: Option<usize>,
+    pub double_clicked: Option<usize>,
     pub ctrl_clicked: Option<usize>,
     pub needs_thumbnail: Vec<String>,
     pub visible_file_ids: Vec<String>,
@@ -65,6 +66,7 @@ pub fn render_grid(
     cols: usize,
 ) -> GridResponse {
     let mut clicked = None;
+    let mut double_clicked = None;
     let mut ctrl_clicked = None;
     let mut needs_thumbnail = Vec::new();
     let mut visible_file_ids = Vec::new();
@@ -117,6 +119,10 @@ pub fn render_grid(
                                 clicked = Some(*idx);
                             }
                         }
+
+                        if resp.double_clicked() && !ui.input(|i| i.modifiers.ctrl) {
+                            double_clicked = Some(*idx);
+                        }
                     }
                 });
             }
@@ -124,6 +130,7 @@ pub fn render_grid(
 
     GridResponse {
         clicked,
+        double_clicked,
         ctrl_clicked,
         needs_thumbnail,
         visible_file_ids,

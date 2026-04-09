@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use api::Api;
-use app::StickerAppWithApi;
+use app::StickerApp;
 use cache::ThumbnailCache;
 use config::Config;
 use hotkey::{HotkeyEvent, HotkeyListener};
@@ -95,7 +95,7 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([700.0, 650.0])
+            .with_inner_size([1080.0, 720.0])
             .with_decorations(false)
             .with_always_on_top()
             .with_transparent(true)
@@ -107,7 +107,7 @@ fn main() -> Result<()> {
         "Sticker Search",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(StickerAppWithApi::new(
+            Ok(Box::new(StickerApp::new(
                 cc, rt, api, telegram, cache, chats, hotkey_rx,
             )))
         }),

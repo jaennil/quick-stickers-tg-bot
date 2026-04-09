@@ -1,6 +1,6 @@
 use anyhow::Result;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -19,17 +19,38 @@ pub struct Api {
 
 #[derive(Debug, Deserialize)]
 struct StickerResponse {
+    sticker_id: String,
     file_id: String,
     document_id: i64,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
     set_name: String,
+    #[serde(default)]
+    emoji: String,
+    #[serde(default)]
+    ocr_engine: String,
+    #[serde(default)]
+    manual_edit: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateStickerRequest<'a> {
+    user_id: i64,
+    text: &'a str,
 }
 
 impl From<StickerResponse> for Sticker {
     fn from(r: StickerResponse) -> Self {
         Sticker {
+            sticker_id: r.sticker_id,
             file_id: r.file_id,
             document_id: r.document_id,
             set_name: r.set_name,
+            text: r.text,
+            emoji: r.emoji,
+            ocr_engine: r.ocr_engine,
+            manual_edit: r.manual_edit,
         }
     }
 }
@@ -59,6 +80,62 @@ impl Api {
         );
 
         self.fetch_stickers(&url).await
+    }
+
+    pub async fn update_sticker_text(&self, sticker_id: &str, text: &str) -> Result<Sticker> {
+        let url = format!(
+            "{}/stickers/{}",
+            self.base_url,
+            urlencoding::encode(sticker_id)
+        );
+        let payload = UpdateStickerRequest {
+            user_id: self.user_id,
+            text,
+        };
+        let mut last_err = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1));
+                warn!(
+                    "[api] update_sticker_text retry {}/{} after {:?}",
+                    attempt, MAX_RETRIES, backoff
+                );
+                tokio::time::sleep(backoff).await;
+            }
+
+            match self
+                .client
+                .patch(&url)
+                .header("X-API-Key", &self.api_key)
+                .json(&payload)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        if status.is_client_error() {
+                            anyhow::bail!("API error: {}", status);
+                        }
+                        last_err = Some(anyhow::anyhow!("API error: {}", status));
+                        continue;
+                    }
+
+                    let sticker: StickerResponse = response.json().await?;
+                    debug!(
+                        "[api] update_sticker_text success on attempt {}",
+                        attempt + 1
+                    );
+                    return Ok(sticker.into());
+                }
+                Err(e) => {
+                    last_err = Some(e.into());
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("update_sticker_text failed after retries")))
     }
 
     pub async fn get_stickers_page(&self, limit: usize, offset: usize) -> Result<Vec<Sticker>> {

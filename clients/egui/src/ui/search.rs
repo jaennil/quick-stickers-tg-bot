@@ -8,10 +8,11 @@ pub struct SearchResponse {
 }
 
 pub fn render_search_bar(ui: &mut egui::Ui, query: &mut String) -> SearchResponse {
+    let desired_width = ui.available_width().clamp(240.0, 420.0);
     let response = ui.add(
         egui::TextEdit::singleline(query)
-            .hint_text("Search... (Enter to send)")
-            .desired_width(ui.available_width()),
+            .hint_text("Search sticker text...")
+            .desired_width(desired_width),
     );
 
     SearchResponse {
