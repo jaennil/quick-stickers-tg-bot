@@ -276,6 +276,20 @@ impl StickerApp {
         self.thumbnail_loader.request(file_id);
     }
 
+    fn touch_texture(&mut self, file_id: &str) {
+        let Some(pos) = self.texture_order.iter().position(|id| id == file_id) else {
+            return;
+        };
+
+        if pos + 1 == self.texture_order.len() {
+            return;
+        }
+
+        if let Some(id) = self.texture_order.remove(pos) {
+            self.texture_order.push_back(id);
+        }
+    }
+
     fn poll_all(&mut self, ctx: &egui::Context) {
         // Poll sticker loading results
         while let Some(result) = self.sticker_loader.try_recv() {
@@ -561,6 +575,10 @@ impl eframe::App for StickerAppWithApi {
             // Request missing thumbnails
             for file_id in grid_resp.needs_thumbnail {
                 app.request_thumbnail(&file_id);
+            }
+
+            for file_id in grid_resp.visible_file_ids {
+                app.touch_texture(&file_id);
             }
 
             // Handle Ctrl+Click — copy to clipboard

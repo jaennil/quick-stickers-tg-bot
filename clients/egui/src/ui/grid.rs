@@ -53,6 +53,7 @@ pub struct GridResponse {
     pub clicked: Option<usize>,
     pub ctrl_clicked: Option<usize>,
     pub needs_thumbnail: Vec<String>,
+    pub visible_file_ids: Vec<String>,
 }
 
 pub fn render_grid(
@@ -66,6 +67,7 @@ pub fn render_grid(
     let mut clicked = None;
     let mut ctrl_clicked = None;
     let mut needs_thumbnail = Vec::new();
+    let mut visible_file_ids = Vec::new();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -79,6 +81,7 @@ pub fn render_grid(
                             egui::vec2(thumb_size, thumb_size),
                             egui::Sense::click(),
                         );
+                        let is_visible = ui.clip_rect().intersects(rect);
 
                         // Background color based on state
                         let bg = if is_selected {
@@ -94,9 +97,14 @@ pub fn render_grid(
                         // Render texture or placeholder
                         if let Some(tex) = textures.get(file_id) {
                             render_texture(ui, tex, rect, thumb_size);
+                            if is_visible {
+                                visible_file_ids.push(file_id.clone());
+                            }
                         } else {
                             render_placeholder(ui, rect);
-                            needs_thumbnail.push(file_id.clone());
+                            if is_visible {
+                                needs_thumbnail.push(file_id.clone());
+                            }
                         }
 
                         if resp.clicked() {
@@ -119,6 +127,7 @@ pub fn render_grid(
         clicked,
         ctrl_clicked,
         needs_thumbnail,
+        visible_file_ids,
     }
 }
 
