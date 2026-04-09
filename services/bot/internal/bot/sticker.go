@@ -128,7 +128,17 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 					"error", err,
 				)
 			} else {
-				packLine = fmt.Sprintf("📦 Из пака %s в базе уже %d стикеров.\n\n", sticker.SetName, packCount)
+				stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: sticker.SetName})
+				if err != nil {
+					logger.Log.Warnw("[STICKER] failed to fetch sticker set for duplicate info",
+						"set", sticker.SetName,
+						"user", userID,
+						"error", err,
+					)
+					packLine = fmt.Sprintf("📦 Пак %s %d стикеров в базе.\n\n", sticker.SetName, packCount)
+				} else {
+					packLine = fmt.Sprintf("📦 Пак %s %d/%d стикеров.\n\n", sticker.SetName, packCount, len(stickerSet.Stickers))
+				}
 			}
 		}
 
