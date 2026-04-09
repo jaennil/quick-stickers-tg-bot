@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -56,7 +55,7 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		b.sendStickerListMsg(ctx, tgBot, chatID, userID, 1)
 		return
 	case "⚙️ Настройки":
-		b.sendSettingsMsg(ctx, tgBot, chatID, userID)
+		b.sendSettingsMsg(ctx, tgBot, chatID)
 		return
 	case "📊 Статистика":
 		count, _ := b.repo.GetUserStickerCount(userID)
@@ -118,9 +117,11 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		b.state.SetLastSticker(userID, sticker.FileUniqueID)
 		b.state.SetAwaitingMode(userID, state.ModeEdit)
 
-		packLine := ""
+		packCount := 0
+		packTotal := 0
+		hasPackTotal := false
 		if sticker.SetName != "" {
-			packCount, err := b.repo.GetUserPackStickerCount(userID, sticker.SetName)
+			packCount, err = b.repo.GetUserPackStickerCount(userID, sticker.SetName)
 			if err != nil {
 				logger.Log.Errorw("[STICKER] failed to count stored pack stickers",
 					"set", sticker.SetName,
@@ -128,36 +129,13 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 					"error", err,
 				)
 			} else {
-				stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: sticker.SetName})
-				if err != nil {
-					logger.Log.Warnw("[STICKER] failed to fetch sticker set for duplicate info",
-						"set", sticker.SetName,
-						"user", userID,
-						"error", err,
-					)
-					packLine = fmt.Sprintf("📦 Пак %s %d стикеров в базе.\n\n", sticker.SetName, packCount)
-				} else {
-					packLine = fmt.Sprintf("📦 Пак %s %d/%d стикеров.\n\n", sticker.SetName, packCount, len(stickerSet.Stickers))
-				}
+				packTotal, hasPackTotal = b.getPackSize(ctx, tgBot, userID, sticker.SetName)
 			}
-		}
-
-		infoLine := "ℹ️ Текст ещё не задан."
-		if existing.Text != "" {
-			infoLine = fmt.Sprintf("📝 Текущий текст: \"%s\"", existing.Text)
-		}
-		if existing.ManualEdit {
-			infoLine += "\nИсточник: ручное изменение"
-		} else if existing.OCREngine != "" {
-			infoLine += fmt.Sprintf("\nИсточник: %s", constants.GetEngineLabel(existing.OCREngine))
 		}
 
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
-			Text: "♻️ Этот стикер уже есть в базе.\n" +
-				packLine +
-				infoLine +
-				"\n\nОтправь новый текст следующим сообщением.",
+			Text:   buildDuplicateStickerMessage(existing, sticker.SetName, packCount, packTotal, hasPackTotal),
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: [][]models.InlineKeyboardButton{
 					ui.EditStickerButton(sticker.FileUniqueID),
@@ -194,54 +172,48 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		stickerType = service.StickerTypeStatic
 	}
 
-	// Run all OCR engines in parallel
-	results := make(map[string]string)
-	var resultsMu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, engine := range constants.OCREngines {
-		wg.Add(1)
-		go func(engineName string) {
-			defer wg.Done()
-			text, err := b.indexer.DownloadAndOCRWithType(ctx, fileURL, engineName, stickerType)
-			if err != nil {
-				logger.Log.Errorw("OCR error", "engine", engineName, "error", err)
-				text = ""
-			}
-			resultsMu.Lock()
-			results[engineName] = text
-			resultsMu.Unlock()
-		}(engine.Name)
+	text, ocrErr := b.indexer.DownloadAndOCRWithType(ctx, fileURL, stickerType)
+	if ocrErr != nil {
+		logger.Log.Warnw("[OCR] sticker recognition failed",
+			"sticker", sticker.FileUniqueID,
+			"engine", constants.DefaultOCREngine.Name,
+			"error", ocrErr,
+		)
+	} else if text != "" {
+		logger.Log.Infow("[OCR] result",
+			"sticker", sticker.FileUniqueID,
+			"engine", constants.DefaultOCREngine.Name,
+			"text", text,
+		)
 	}
-	wg.Wait()
-
-	// Log results
-	for name, text := range results {
-		if text != "" {
-			logger.Log.Infow("[OCR] result", "sticker", sticker.FileUniqueID, "engine", name, "text", text)
-		}
-	}
-
-	// Save results for selection
-	b.state.SetPendingOCR(sticker.FileUniqueID, results)
-	b.state.SetLastSticker(userID, sticker.FileUniqueID)
 
 	// Decode document_id from file_id
 	documentID, _ := fileid.DecodeDocumentID(sticker.FileID)
 
-	// Save sticker without text
 	s := &repository.Sticker{
 		UserID:     userID,
 		StickerID:  sticker.FileUniqueID,
 		SetName:    sticker.SetName,
 		FileID:     sticker.FileID,
 		DocumentID: documentID,
-		Text:       "",
+		Text:       text,
 		Emoji:      sticker.Emoji,
 		IsAnimated: sticker.IsAnimated,
 		IsVideo:    sticker.IsVideo,
 	}
-	b.repo.SaveSticker(s)
+	if ocrErr == nil {
+		s.OCREngine = constants.DefaultOCREngine.Name
+	}
+	if err := b.repo.SaveSticker(s); err != nil {
+		logger.Log.Errorw("[STICKER] failed to save sticker", "sticker", sticker.FileUniqueID, "user", userID, "error", err)
+		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: progressMsg.ID,
+			Text:      "⚠️ Не удалось сохранить стикер в базе.",
+		})
+		return
+	}
+	b.state.SetLastSticker(userID, sticker.FileUniqueID)
 
 	// Save thumbnail in background
 	go func() {
@@ -262,31 +234,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		}
 	}()
 
-	// Build results message
-	var msgBuilder strings.Builder
-	msgBuilder.WriteString("Результаты распознавания:\n\n")
-
-	var buttons [][]models.InlineKeyboardButton
-	hasResults := false
-
-	for _, engine := range constants.OCREngines {
-		text := results[engine.Name]
-		if text != "" {
-			hasResults = true
-			msgBuilder.WriteString(fmt.Sprintf("%s:\n%s\n\n", engine.Label, text))
-			buttons = append(buttons, []models.InlineKeyboardButton{
-				{Text: fmt.Sprintf("✓ %s", engine.Label), CallbackData: fmt.Sprintf("selectocr:%s:%s", sticker.FileUniqueID, engine.Name)},
-			})
-		} else {
-			msgBuilder.WriteString(fmt.Sprintf("%s:\n(не распознано)\n\n", engine.Label))
-		}
-	}
-
-	if !hasResults {
-		msgBuilder.WriteString("Текст не распознан ни одним движком.")
-	}
-
-	buttons = append(buttons, ui.EditStickerButton(sticker.FileUniqueID))
+	buttons := [][]models.InlineKeyboardButton{ui.EditStickerButton(sticker.FileUniqueID)}
 	if sticker.SetName != "" {
 		buttons = append(buttons, ui.AddPackButton(sticker.SetName))
 	}
@@ -294,11 +242,31 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      msgBuilder.String(),
+		Text:      buildOCRResultMessage("стикер", text, ocrErr),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: buttons,
 		},
 	})
+}
+
+func (b *Bot) getPackSize(ctx context.Context, tgBot *bot.Bot, userID int64, setName string) (int, bool) {
+	if total, ok := b.state.GetPackSize(setName); ok {
+		return total, true
+	}
+
+	stickerSet, err := tgBot.GetStickerSet(ctx, &bot.GetStickerSetParams{Name: setName})
+	if err != nil {
+		logger.Log.Warnw("[PACK] failed to fetch pack size",
+			"set", setName,
+			"user", userID,
+			"error", err,
+		)
+		return 0, false
+	}
+
+	total := len(stickerSet.Stickers)
+	b.state.SetPackSize(setName, total)
+	return total, true
 }
 
 func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *models.Update) {

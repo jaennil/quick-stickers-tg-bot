@@ -18,16 +18,14 @@ type TelegramConfig struct {
 }
 
 type DatabaseConfig struct {
-	Driver         string `yaml:"driver"`           // "sqlite" or "postgres"
-	DSN            string `yaml:"dsn"`              // connection string or path for sqlite
-	MaxOpenConns   int    `yaml:"max_open_conns"`   // max open connections
-	MaxIdleConns   int    `yaml:"max_idle_conns"`   // max idle connections
+	Driver       string `yaml:"driver"`         // "sqlite" or "postgres"
+	DSN          string `yaml:"dsn"`            // connection string or path for sqlite
+	MaxOpenConns int    `yaml:"max_open_conns"` // max open connections
+	MaxIdleConns int    `yaml:"max_idle_conns"` // max idle connections
 }
 
 type OCRConfig struct {
-	Engine       string   `yaml:"engine"`
 	SpaceAPIKeys []string `yaml:"space_api_keys"`
-	ServerURL    string   `yaml:"server_url"`
 	ProxyURL     string   `yaml:"proxy_url"`
 }
 
@@ -59,12 +57,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Database.MaxIdleConns == 0 {
 		cfg.Database.MaxIdleConns = 10
-	}
-	if cfg.OCR.Engine == "" {
-		cfg.OCR.Engine = "paddle"
-	}
-	if cfg.OCR.ServerURL == "" {
-		cfg.OCR.ServerURL = "http://127.0.0.1:8765"
 	}
 	if cfg.API.Port == 0 {
 		cfg.API.Port = 8080

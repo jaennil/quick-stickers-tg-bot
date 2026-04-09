@@ -19,7 +19,7 @@ const helpText = `Как добавить стикеры:
 /edit <правильный текст> — после отправки стикера
 
 Настройки:
-/settings — выбрать движок OCR (PaddleOCR, EasyOCR, OCR.space API, Tesseract)`
+/settings — посмотреть текущую OCR-конфигурацию`
 
 const helpTextShort = `Как добавить стикеры:
 • Отправь мне стикер — добавлю один

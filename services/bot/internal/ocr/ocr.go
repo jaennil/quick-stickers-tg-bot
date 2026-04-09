@@ -29,16 +29,30 @@ const maxAPIRetries = 3
 // ErrQuotaExceeded is returned when OCR.space API quota is exceeded
 var ErrQuotaExceeded = errors.New("ocr.space quota exceeded")
 
+type Provider interface {
+	Name() string
+	RecognizeText(ctx context.Context, imagePath string) (string, error)
+	IsAvailable() bool
+}
+
 type OCR struct {
+	provider Provider
+}
+
+type ocrSpaceProvider struct {
 	apiKeys     []string
 	apiKeyIndex int
 	apiKeyMu    sync.Mutex
 	client      *http.Client
-	serverURL   string
-	proxyURL    string
 }
 
-func New(apiKeys []string, serverURL string, proxyURL string) *OCR {
+func New(apiKeys []string, proxyURL string) *OCR {
+	return &OCR{
+		provider: newOCRSpaceProvider(apiKeys, proxyURL),
+	}
+}
+
+func newOCRSpaceProvider(apiKeys []string, proxyURL string) Provider {
 	client := &http.Client{
 		Timeout: constants.HTTPTimeout,
 	}
@@ -70,14 +84,11 @@ func New(apiKeys []string, serverURL string, proxyURL string) *OCR {
 		}
 	}
 
-	return &OCR{
-		apiKeys:   apiKeys,
-		serverURL: serverURL,
-		proxyURL:  proxyURL,
-		client:    client,
+	return &ocrSpaceProvider{
+		apiKeys: apiKeys,
+		client:  client,
 	}
 }
-
 
 type ocrSpaceResponse struct {
 	ParsedResults []struct {
@@ -87,108 +98,61 @@ type ocrSpaceResponse struct {
 	ErrorMessage          string `json:"ErrorMessage,omitempty"`
 }
 
-// RecognizeText распознает текст используя указанный движок
-// engine: "paddle", "easy", "api" (ocr.space), "tesseract"
-func (o *OCR) RecognizeText(ctx context.Context, imagePath string, engine string) (string, error) {
-	// Проверяем отмену
+// RecognizeText uses OCR.space as the only active OCR provider.
+func (o *OCR) RecognizeText(ctx context.Context, imagePath string) (string, error) {
+	if o.provider == nil {
+		return "", fmt.Errorf("no OCR provider configured")
+	}
+
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	default:
 	}
 
-	switch engine {
-	case "api":
-		text, err := o.recognizeViaAPI(ctx, imagePath)
-		if err == nil {
-			// Return result even if empty - ocr.space is authoritative
-			return text, nil
-		}
-		// If quota exceeded, propagate error (let caller decide)
-		if errors.Is(err, ErrQuotaExceeded) {
-			return "", err
-		}
-		// For other errors (network, etc), return error without fallback
-		return "", err
+	return o.provider.RecognizeText(ctx, imagePath)
+}
 
-	case "tesseract":
-		return o.recognizeViaTesseract(ctx, imagePath)
+func (o *OCR) IsAvailable() bool {
+	return o.provider != nil && o.provider.IsAvailable()
+}
 
-	case "easy", "paddle":
-		text, err := o.recognizeViaLocalServer(ctx, imagePath, engine)
-		if err == nil && text != "" {
-			return text, nil
-		}
-		// fallback to tesseract if server not running
-		logger.Log.Warnw("[OCR] local server failed, falling back to tesseract", "engine", engine, "error", err)
-		return o.recognizeViaTesseract(ctx, imagePath)
-
-	default:
-		// По умолчанию paddle
-		text, err := o.recognizeViaLocalServer(ctx, imagePath, "paddle")
-		if err == nil && text != "" {
-			return text, nil
-		}
-		logger.Log.Warnw("[OCR] local server failed, falling back to tesseract", "engine", "paddle", "error", err)
-		return o.recognizeViaTesseract(ctx, imagePath)
+func (o *OCR) ProviderName() string {
+	if o.provider == nil {
+		return ""
 	}
+	return o.provider.Name()
 }
 
-type localOCRResponse struct {
-	Text  string `json:"text"`
-	Error string `json:"error,omitempty"`
+func (p *ocrSpaceProvider) Name() string {
+	return constants.OCRSpaceEngineName
 }
 
-func (o *OCR) recognizeViaLocalServer(ctx context.Context, imagePath string, engine string) (string, error) {
-	reqBody, _ := json.Marshal(map[string]string{"path": imagePath, "engine": engine})
-
-	req, err := http.NewRequestWithContext(ctx, "POST", o.serverURL+"/ocr", bytes.NewReader(reqBody))
+func (p *ocrSpaceProvider) RecognizeText(ctx context.Context, imagePath string) (string, error) {
+	text, err := p.recognizeViaAPI(ctx, imagePath)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: constants.HTTPTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var result localOCRResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", err
-	}
-
-	if result.Error != "" {
-		return "", fmt.Errorf("local ocr error: %s", result.Error)
-	}
-
-	return cleanText(result.Text), nil
+	return text, nil
 }
 
-func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, error) {
-	if len(o.apiKeys) == 0 {
+func (p *ocrSpaceProvider) recognizeViaAPI(ctx context.Context, imagePath string) (string, error) {
+	if len(p.apiKeys) == 0 {
 		return "", fmt.Errorf("no OCR.space API keys configured")
 	}
 
 	// Try all keys until one works
-	startKeyIndex := o.getNextKeyIndex()
+	startKeyIndex := p.getNextKeyIndex()
 	triedKeys := 0
 
-	for triedKeys < len(o.apiKeys) {
-		keyIndex := (startKeyIndex + triedKeys) % len(o.apiKeys)
-		apiKey := o.apiKeys[keyIndex]
+	for triedKeys < len(p.apiKeys) {
+		keyIndex := (startKeyIndex + triedKeys) % len(p.apiKeys)
+		apiKey := p.apiKeys[keyIndex]
 
 		var text string
 		var err error
 		for attempt := range maxAPIRetries {
-			text, err = o.tryAPIKey(ctx, imagePath, apiKey)
+			text, err = p.tryAPIKey(ctx, imagePath, apiKey)
 			if err == nil {
 				return text, nil
 			}
@@ -223,17 +187,17 @@ func (o *OCR) recognizeViaAPI(ctx context.Context, imagePath string) (string, er
 	}
 
 	// All keys exhausted
-	logger.Log.Errorw("[OCR] all API keys quota exceeded", "total_keys", len(o.apiKeys))
+	logger.Log.Errorw("[OCR] all API keys quota exceeded", "total_keys", len(p.apiKeys))
 	return "", ErrQuotaExceeded
 }
 
 // getNextKeyIndex returns the next key index for rotation
-func (o *OCR) getNextKeyIndex() int {
-	o.apiKeyMu.Lock()
-	defer o.apiKeyMu.Unlock()
+func (p *ocrSpaceProvider) getNextKeyIndex() int {
+	p.apiKeyMu.Lock()
+	defer p.apiKeyMu.Unlock()
 
-	idx := o.apiKeyIndex
-	o.apiKeyIndex = (o.apiKeyIndex + 1) % len(o.apiKeys)
+	idx := p.apiKeyIndex
+	p.apiKeyIndex = (p.apiKeyIndex + 1) % len(p.apiKeys)
 	return idx
 }
 
@@ -297,10 +261,16 @@ func ensureUnderSizeLimit(ctx context.Context, imagePath string, maxBytes int64)
 	return compressedPath, cleanup, nil
 }
 
+func maskAPIKey(apiKey string) string {
+	if len(apiKey) <= 8 {
+		return apiKey
+	}
+	return apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+}
+
 // tryAPIKey attempts OCR with a single API key
-func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (string, error) {
-	// Маскируем ключ для логов
-	maskedKey := apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+func (p *ocrSpaceProvider) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (string, error) {
+	maskedKey := maskAPIKey(apiKey)
 	logger.Log.Debugw("[OCR] trying ocr.space API", "key", maskedKey)
 
 	// Сжимаем если > 1MB (ограничение ocr.space)
@@ -347,7 +317,7 @@ func (o *OCR) tryAPIKey(ctx context.Context, imagePath string, apiKey string) (s
 
 	start := time.Now()
 	// Отправляем
-	resp, err := o.client.Do(req)
+	resp, err := p.client.Do(req)
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		metrics.OCRRequestDuration.WithLabelValues("error").Observe(duration)
@@ -424,56 +394,6 @@ func cleanText(text string) string {
 }
 
 // IsAvailable проверяет доступен ли OCR API
-func (o *OCR) IsAvailable() bool {
-	return len(o.apiKeys) > 0
-}
-
-// CompareEngines runs all available OCR engines on the image and returns results
-type CompareResult struct {
-	Engine string
-	Text   string
-	Error  error
-}
-
-func (o *OCR) CompareEngines(ctx context.Context, imagePath string) []CompareResult {
-	engines := []string{"easy", "paddle", "tesseract"}
-	results := make([]CompareResult, len(engines))
-
-	for i, engine := range engines {
-		var text string
-		var err error
-
-		switch engine {
-		case "easy", "paddle":
-			text, err = o.recognizeViaLocalServer(ctx, imagePath, engine)
-		case "tesseract":
-			text, err = o.recognizeViaTesseract(ctx, imagePath)
-		}
-
-		results[i] = CompareResult{
-			Engine: engine,
-			Text:   text,
-			Error:  err,
-		}
-	}
-
-	return results
-}
-
-// recognizeViaTesseract - fallback на локальный Tesseract
-func (o *OCR) recognizeViaTesseract(ctx context.Context, imagePath string) (string, error) {
-	cmd := exec.CommandContext(ctx, "tesseract", imagePath, "stdout",
-		"-l", "rus+eng",
-		"--psm", "6",
-		"--oem", "3",
-	)
-
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	if err := cmd.Run(); err != nil {
-		return "", err
-	}
-
-	return cleanText(stdout.String()), nil
+func (p *ocrSpaceProvider) IsAvailable() bool {
+	return len(p.apiKeys) > 0
 }

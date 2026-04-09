@@ -24,38 +24,34 @@ import (
 )
 
 type IndexProgress struct {
-	Current            int64
-	Total              int
-	Processed          int64
-	WithText           int64
-	Cancelled          bool
-	QuotaExceeded      bool
-	LastStickerFileURL string
-	RemainingStickers  []models.Sticker
-	Report             *IndexReport
+	Current       int64
+	Total         int
+	Processed     int64
+	WithText      int64
+	Cancelled     bool
+	QuotaExceeded bool
+	Report        *IndexReport
 }
 
 type IndexReport struct {
 	Total          int // всего в паке
 	ToProcess      int // нужно обработать
-	SkippedAPI     int // пропущено (уже api)
+	AlreadyIndexed int // уже есть текст
 	SkippedManual  int // пропущено (manual_edit)
-	Reprocessed    int // переобработано (было local → стало api)
 	NewStickers    int // новые стикеры
 	WithText       int // с текстом
 	APIUnavailable bool
 }
 
 type thumbJob struct {
-	FileID           string
-	FileURL          string
-	StickerType      StickerType
-	ThumbnailFileID  string // Telegram's built-in thumbnail file_id (for animated/video)
+	FileID          string
+	FileURL         string
+	StickerType     StickerType
+	ThumbnailFileID string // Telegram's built-in thumbnail file_id (for animated/video)
 }
 
 type stickerJob struct {
-	Sticker      models.Sticker
-	IsReprocess  bool // переобработка существующего
+	Sticker models.Sticker
 }
 
 type ProgressCallback func(progress IndexProgress)
@@ -74,7 +70,6 @@ func (i *Indexer) IndexPack(
 	tgBot *bot.Bot,
 	stickerSet *models.StickerSet,
 	userID int64,
-	ocrEngine string,
 	onProgress ProgressCallback,
 ) IndexProgress {
 	total := len(stickerSet.Stickers)
@@ -94,27 +89,17 @@ func (i *Indexer) IndexPack(
 	for _, sticker := range stickerSet.Stickers {
 		existing, exists := existingStickers[sticker.FileUniqueID]
 		if exists {
-			// Skip if manually edited
 			if existing.ManualEdit {
 				report.SkippedManual++
 				continue
 			}
-			// Skip if already processed by api
-			if existing.OCREngine == "api" {
-				report.SkippedAPI++
+			if existing.Text != "" {
+				report.AlreadyIndexed++
 				continue
 			}
-			// Reprocess if processed by local engine
-			stickersToProcess = append(stickersToProcess, stickerJob{
-				Sticker:     sticker,
-				IsReprocess: true,
-			})
+			stickersToProcess = append(stickersToProcess, stickerJob{Sticker: sticker})
 		} else {
-			// New sticker
-			stickersToProcess = append(stickersToProcess, stickerJob{
-				Sticker:     sticker,
-				IsReprocess: false,
-			})
+			stickersToProcess = append(stickersToProcess, stickerJob{Sticker: sticker})
 			report.NewStickers++
 		}
 	}
@@ -125,7 +110,7 @@ func (i *Indexer) IndexPack(
 		"pack", setName,
 		"total", total,
 		"to_process", report.ToProcess,
-		"skipped_api", report.SkippedAPI,
+		"already_indexed", report.AlreadyIndexed,
 		"skipped_manual", report.SkippedManual,
 		"new", report.NewStickers,
 		"workers", constants.Workers,
@@ -142,13 +127,9 @@ func (i *Indexer) IndexPack(
 
 	var processed atomic.Int64
 	var withText atomic.Int64
-	var reprocessed atomic.Int64
 	var completed atomic.Int64
 	var cancelled atomic.Bool
 	var quotaExceeded atomic.Bool
-	var lastStickerURL atomic.Value
-	var remainingMu sync.Mutex
-	var remainingStickers []models.Sticker
 
 	// Create cancellable context for quota exceeded
 	indexCtx, cancelIndex := context.WithCancel(ctx)
@@ -239,8 +220,7 @@ func (i *Indexer) IndexPack(
 					stickerType = StickerTypeStatic
 				}
 
-				// Always use api engine for reindexing
-				text, ocrErr := i.DownloadAndOCRWithType(indexCtx, fileURL, "api", stickerType)
+				text, ocrErr := i.DownloadAndOCRWithType(indexCtx, fileURL, stickerType)
 
 				// Check for quota exceeded
 				if errors.Is(ocrErr, ocr.ErrQuotaExceeded) {
@@ -249,7 +229,6 @@ func (i *Indexer) IndexPack(
 						"sticker", sticker.FileUniqueID,
 					)
 					quotaExceeded.Store(true)
-					lastStickerURL.Store(fileURL)
 					cancelIndex() // Stop all workers
 					return
 				}
@@ -285,7 +264,7 @@ func (i *Indexer) IndexPack(
 					DocumentID: documentID,
 					Text:       text,
 					Emoji:      sticker.Emoji,
-					OCREngine:  "api",
+					OCREngine:  constants.OCRSpaceEngineName,
 					IsAnimated: sticker.IsAnimated,
 					IsVideo:    sticker.IsVideo,
 				}
@@ -303,9 +282,6 @@ func (i *Indexer) IndexPack(
 					metrics.DBSaveDuration.Observe(time.Since(dbStart).Seconds())
 					processed.Add(1)
 					withText.Add(1)
-					if job.IsReprocess {
-						reprocessed.Add(1)
-					}
 					// Record sticker type for metrics
 					var typeLabel string
 					switch {
@@ -337,7 +313,6 @@ func (i *Indexer) IndexPack(
 						"sticker", sticker.FileUniqueID,
 						"text", text,
 						"emoji", sticker.Emoji,
-						"reprocess", job.IsReprocess,
 					)
 				}
 				completed.Add(1)
@@ -347,15 +322,9 @@ func (i *Indexer) IndexPack(
 
 	// Send jobs in goroutine
 	go func() {
-		for idx, job := range stickersToProcess {
+		for _, job := range stickersToProcess {
 			select {
 			case <-indexCtx.Done():
-				// Collect remaining stickers
-				remainingMu.Lock()
-				for _, j := range stickersToProcess[idx:] {
-					remainingStickers = append(remainingStickers, j.Sticker)
-				}
-				remainingMu.Unlock()
 				close(jobs)
 				return
 			case jobs <- job:
@@ -400,30 +369,17 @@ func (i *Indexer) IndexPack(
 	close(thumbJobs)
 	thumbWg.Wait()
 
-	// Get last sticker URL if set
-	var lastURL string
-	if v := lastStickerURL.Load(); v != nil {
-		lastURL = v.(string)
-	}
-
-	remainingMu.Lock()
-	remaining := remainingStickers
-	remainingMu.Unlock()
-
-	report.Reprocessed = int(reprocessed.Load())
 	report.WithText = int(withText.Load())
 	report.APIUnavailable = quotaExceeded.Load()
 
 	result := IndexProgress{
-		Current:            completed.Load(),
-		Total:              len(stickersToProcess),
-		Processed:          processed.Load(),
-		WithText:           withText.Load(),
-		Cancelled:          cancelled.Load(),
-		QuotaExceeded:      quotaExceeded.Load(),
-		LastStickerFileURL: lastURL,
-		RemainingStickers:  remaining,
-		Report:             report,
+		Current:       completed.Load(),
+		Total:         len(stickersToProcess),
+		Processed:     processed.Load(),
+		WithText:      withText.Load(),
+		Cancelled:     cancelled.Load(),
+		QuotaExceeded: quotaExceeded.Load(),
+		Report:        report,
 	}
 
 	logger.Log.Infow("[INDEX] pack indexing completed",
@@ -431,13 +387,11 @@ func (i *Indexer) IndexPack(
 		"total", total,
 		"to_process", report.ToProcess,
 		"processed", result.Processed,
-		"reprocessed", report.Reprocessed,
 		"with_text", result.WithText,
-		"skipped_api", report.SkippedAPI,
+		"already_indexed", report.AlreadyIndexed,
 		"skipped_manual", report.SkippedManual,
 		"cancelled", result.Cancelled,
 		"quota_exceeded", result.QuotaExceeded,
-		"remaining", len(result.RemainingStickers),
 		"user", userID,
 	)
 
@@ -453,11 +407,11 @@ const (
 	StickerTypeVideo                       // WEBM video
 )
 
-func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string, engine string) (string, error) {
-	return i.DownloadAndOCRWithType(ctx, fileURL, engine, StickerTypeStatic)
+func (i *Indexer) DownloadAndOCR(ctx context.Context, fileURL string) (string, error) {
+	return i.DownloadAndOCRWithType(ctx, fileURL, StickerTypeStatic)
 }
 
-func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, engine string, stickerType StickerType) (string, error) {
+func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, stickerType StickerType) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -512,11 +466,11 @@ func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, en
 	default:
 		// Static WebP - convert to PNG
 		if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
-			return i.ocr.RecognizeText(ctx, tmpFile.Name(), engine)
+			return i.ocr.RecognizeText(ctx, tmpFile.Name())
 		}
 	}
 
-	return i.ocr.RecognizeText(ctx, pngPath, engine)
+	return i.ocr.RecognizeText(ctx, pngPath)
 }
 
 // extractTGSFrame extracts the first frame from a TGS (Lottie) file
@@ -567,36 +521,6 @@ func extractVideoFrame(ctx context.Context, webmPath, pngPath string) error {
 func convertWebPToPNG(ctx context.Context, src, dst string) error {
 	cmd := exec.CommandContext(ctx, "convert", src, dst)
 	return cmd.Run()
-}
-
-// CompareOCREngines downloads sticker and compares all OCR engines
-func (i *Indexer) CompareOCREngines(ctx context.Context, fileURL string) []ocr.CompareResult {
-	resp, err := http.Get(fileURL)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	tmpFile, err := os.CreateTemp("", "sticker-compare-*.webp")
-	if err != nil {
-		return nil
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		return nil
-	}
-	tmpFile.Close()
-
-	pngPath := strings.TrimSuffix(tmpFile.Name(), filepath.Ext(tmpFile.Name())) + ".png"
-	defer os.Remove(pngPath)
-
-	imagePath := tmpFile.Name()
-	if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err == nil {
-		imagePath = pngPath
-	}
-
-	return i.ocr.CompareEngines(ctx, imagePath)
 }
 
 func (i *Indexer) DownloadAndSaveThumbnail(ctx context.Context, fileID, fileURL string) error {

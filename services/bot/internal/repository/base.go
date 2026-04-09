@@ -56,24 +56,6 @@ func (r *BaseRepository) updateTextLower() {
 	}
 }
 
-func (r *BaseRepository) GetUserOCREngine(userID int64) string {
-	var engine string
-	err := r.db.Get(&engine, r.db.Rebind("SELECT ocr_engine FROM user_settings WHERE user_id = ?"), userID)
-	if err != nil {
-		return "api"
-	}
-	return engine
-}
-
-func (r *BaseRepository) SetUserOCREngine(userID int64, engine string) error {
-	query := r.db.Rebind(`
-		INSERT INTO user_settings (user_id, ocr_engine) VALUES (?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET ocr_engine = EXCLUDED.ocr_engine
-	`)
-	_, err := r.db.Exec(query, userID, engine)
-	return err
-}
-
 func (r *BaseRepository) SaveSticker(sticker *Sticker) error {
 	textLower := strings.ToLower(sticker.Text)
 	mediaType := sticker.MediaType
@@ -199,10 +181,6 @@ func (r *BaseRepository) GetUserPackStats(userID int64) ([]*PackStats, error) {
 		SELECT
 			set_name,
 			COUNT(*) as total,
-			SUM(CASE WHEN ocr_engine = 'api' THEN 1 ELSE 0 END) as by_api,
-			SUM(CASE WHEN ocr_engine = 'paddle' THEN 1 ELSE 0 END) as by_paddle,
-			SUM(CASE WHEN ocr_engine = 'easy' THEN 1 ELSE 0 END) as by_easy,
-			SUM(CASE WHEN ocr_engine = 'tesseract' THEN 1 ELSE 0 END) as by_tesseract,
 			SUM(CASE WHEN manual_edit = TRUE THEN 1 ELSE 0 END) as manual_edited
 		FROM stickers
 		WHERE user_id = ? AND set_name != ''
@@ -218,7 +196,7 @@ func (r *BaseRepository) GetUserPackStats(userID int64) ([]*PackStats, error) {
 	var stats []*PackStats
 	for rows.Next() {
 		var s PackStats
-		if err := rows.Scan(&s.SetName, &s.Total, &s.ByAPI, &s.ByPaddle, &s.ByEasy, &s.ByTesseract, &s.ManualEdited); err != nil {
+		if err := rows.Scan(&s.SetName, &s.Total, &s.ManualEdited); err != nil {
 			return nil, err
 		}
 		stats = append(stats, &s)

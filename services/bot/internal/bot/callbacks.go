@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/state"
@@ -51,7 +50,7 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	case "list":
 		b.sendStickerListMsg(ctx, tgBot, chatID, userID, 1)
 	case "settings":
-		b.sendSettings(ctx, tgBot, chatID, userID, messageID)
+		b.sendSettings(ctx, tgBot, chatID, messageID)
 	case "stats":
 		count, _ := b.repo.GetUserStickerCount(userID)
 		tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -72,95 +71,6 @@ func (b *Bot) handleMenuCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 			},
 		})
 	}
-}
-
-func (b *Bot) handleOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	engine := strings.TrimPrefix(update.CallbackQuery.Data, CallbackOCR)
-	userID := update.CallbackQuery.From.ID
-	logger.Log.Infow("[CALLBACK] ocr", "engine", engine, "user", userID)
-
-	if !constants.IsValidEngine(engine) {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Неизвестный движок",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	if err := b.repo.SetUserOCREngine(userID, engine); err != nil {
-		logger.Log.Errorw("Error saving OCR engine", "error", err)
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Ошибка сохранения",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
-		MessageID: update.CallbackQuery.Message.Message.ID,
-		Text:      b.buildSettingsText(engine),
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: ui.OCREngineKeyboard(engine),
-		},
-	})
-
-	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-		CallbackQueryID: update.CallbackQuery.ID,
-		Text:            fmt.Sprintf("Выбран: %s", constants.GetEngineLabel(engine)),
-	})
-}
-
-func (b *Bot) handleSelectOCRCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	data := strings.TrimPrefix(update.CallbackQuery.Data, CallbackSelectOCR)
-	userID := update.CallbackQuery.From.ID
-	logger.Log.Infow("[CALLBACK] selectocr", "data", data, "user", userID)
-	parts := strings.SplitN(data, ":", 2)
-	if len(parts) != 2 {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Ошибка",
-		})
-		return
-	}
-
-	stickerID, engine := parts[0], parts[1]
-
-	results, ok := b.state.GetPendingOCR(stickerID)
-	if !ok {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Результаты устарели, отправь стикер заново",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	text := results[engine]
-	if err := b.repo.UpdateStickerText(userID, stickerID, text); err != nil {
-		logger.Log.Errorw("Error updating sticker text", "error", err)
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Ошибка сохранения",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	b.state.DeletePendingOCR(stickerID)
-
-	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
-		MessageID: update.CallbackQuery.Message.Message.ID,
-		Text:      fmt.Sprintf("✅ Сохранено!\n\nДвижок: %s\nТекст: \"%s\"", constants.GetEngineLabel(engine), text),
-	})
-
-	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-		CallbackQueryID: update.CallbackQuery.ID,
-		Text:            "Сохранено!",
-	})
 }
 
 func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -395,52 +305,6 @@ func (b *Bot) handleDeletePackCallback(ctx context.Context, tgBot *bot.Bot, upda
 			},
 		},
 	})
-}
-
-func (b *Bot) handleFallbackCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
-	data := strings.TrimPrefix(update.CallbackQuery.Data, CallbackFallback)
-	parts := strings.SplitN(data, ":", 2)
-	if len(parts) != 2 {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Ошибка",
-		})
-		return
-	}
-
-	engine, setName := parts[0], parts[1]
-	userID := update.CallbackQuery.From.ID
-	chatID := update.CallbackQuery.Message.Message.Chat.ID
-	messageID := update.CallbackQuery.Message.Message.ID
-	logger.Log.Infow("[CALLBACK] fallback", "engine", engine, "pack", setName, "user", userID)
-
-	storedSetName, remainingStickers, ok := b.state.GetRemainingStickers(userID)
-	if !ok || storedSetName != setName {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "Данные устарели, начни индексацию заново",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	if b.state.HasActiveIndexing(userID) {
-		tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            "У тебя уже идёт индексация",
-			ShowAlert:       true,
-		})
-		return
-	}
-
-	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-		CallbackQueryID: update.CallbackQuery.ID,
-		Text:            fmt.Sprintf("Продолжаю с %s...", constants.GetEngineLabel(engine)),
-	})
-
-	b.state.ClearRemainingStickers(userID)
-
-	go b.continueIndexing(ctx, tgBot, chatID, messageID, userID, setName, engine, remainingStickers)
 }
 
 func (b *Bot) handleMediaCallback(ctx context.Context, tgBot *bot.Bot, update *models.Update) {

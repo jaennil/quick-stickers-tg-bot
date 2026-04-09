@@ -21,40 +21,28 @@ func (b *Bot) sendMainMenu(ctx context.Context, tgBot *bot.Bot, chatID int64) {
 	})
 }
 
-func (b *Bot) buildSettingsText(currentEngine string) string {
+func (b *Bot) buildSettingsText() string {
 	text := "⚙️ Настройки\n\n"
-	text += fmt.Sprintf("Текущий движок: %s\n", constants.GetEngineLabel(currentEngine))
-	text += constants.GetEngineDesc(currentEngine) + "\n\n"
-	text += "📋 Доступные движки:\n\n"
-	for _, e := range constants.OCREngines {
-		marker := "○"
-		if e.Name == currentEngine {
-			marker = "●"
-		}
-		text += fmt.Sprintf("%s %s\n%s\n\n", marker, e.Label, e.Desc)
-	}
+	text += fmt.Sprintf("Текущий OCR: %s\n", constants.DefaultOCREngine.Label)
+	text += constants.DefaultOCREngine.Desc + "\n\n"
+	text += "Другие OCR-движки отключены. Если позже появится адекватный вариант, добавим его отдельным провайдером."
 	return text
 }
 
-func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64) {
-	currentEngine := b.repo.GetUserOCREngine(userID)
+func (b *Bot) sendSettingsMsg(ctx context.Context, tgBot *bot.Bot, chatID int64) {
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   b.buildSettingsText(currentEngine),
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: ui.OCREngineKeyboard(currentEngine),
-		},
+		Text:   b.buildSettingsText(),
 	})
 }
 
-func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, messageID int) {
-	currentEngine := b.repo.GetUserOCREngine(userID)
+func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, messageID int) {
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: messageID,
-		Text:      b.buildSettingsText(currentEngine),
+		Text:      b.buildSettingsText(),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: ui.OCREngineKeyboardWithBack(currentEngine),
+			InlineKeyboard: [][]models.InlineKeyboardButton{ui.BackButton()},
 		},
 	})
 }
@@ -94,25 +82,8 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 		msgBuilder.WriteString("📦 Паки:\n\n")
 		for _, ps := range packStats {
 			msgBuilder.WriteString(fmt.Sprintf("• %s — %d шт.\n", ps.SetName, ps.Total))
-			// Show engine breakdown
-			var engines []string
-			if ps.ByAPI > 0 {
-				engines = append(engines, fmt.Sprintf("☁️ api: %d", ps.ByAPI))
-			}
-			if ps.ByPaddle > 0 {
-				engines = append(engines, fmt.Sprintf("🔷 paddle: %d", ps.ByPaddle))
-			}
-			if ps.ByEasy > 0 {
-				engines = append(engines, fmt.Sprintf("🔶 easy: %d", ps.ByEasy))
-			}
-			if ps.ByTesseract > 0 {
-				engines = append(engines, fmt.Sprintf("📦 tesseract: %d", ps.ByTesseract))
-			}
 			if ps.ManualEdited > 0 {
-				engines = append(engines, fmt.Sprintf("✏️ ручные: %d", ps.ManualEdited))
-			}
-			if len(engines) > 0 {
-				msgBuilder.WriteString("  " + strings.Join(engines, ", ") + "\n")
+				msgBuilder.WriteString(fmt.Sprintf("  ✏️ ручные: %d\n", ps.ManualEdited))
 			}
 			msgBuilder.WriteString("\n")
 

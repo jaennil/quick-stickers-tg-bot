@@ -26,10 +26,6 @@ type Sticker struct {
 type PackStats struct {
 	SetName      string
 	Total        int
-	ByAPI        int
-	ByPaddle     int
-	ByEasy       int
-	ByTesseract  int
 	ManualEdited int
 }
 
@@ -55,10 +51,6 @@ type Repository interface {
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error
 	GetThumbnail(fileID string) ([]byte, error)
-
-	// User settings
-	GetUserOCREngine(userID int64) string
-	SetUserOCREngine(userID int64, engine string) error
 
 	Close() error
 }

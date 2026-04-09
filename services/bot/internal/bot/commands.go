@@ -8,7 +8,6 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
-	"github.com/jaennil/sticker-search-bot/internal/ui"
 )
 
 func (b *Bot) handleStart(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -42,14 +41,9 @@ func (b *Bot) handleStats(ctx context.Context, tgBot *bot.Bot, update *models.Up
 func (b *Bot) handleSettings(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
 	logger.Log.Infow("[CMD] /settings", "user", userID)
-	currentEngine := b.repo.GetUserOCREngine(userID)
-	logger.Log.Infow("[CMD] /settings result", "user", userID, "engine", currentEngine)
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
-		Text:   fmt.Sprintf("Текущий OCR движок: %s\n\nВыбери движок для распознавания текста:", currentEngine),
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: ui.OCREngineKeyboard(currentEngine),
-		},
+		Text:   b.buildSettingsText(),
 	})
 }
 

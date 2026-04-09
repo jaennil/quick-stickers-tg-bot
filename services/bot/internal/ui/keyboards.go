@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/go-telegram/bot/models"
-	"github.com/jaennil/sticker-search-bot/internal/constants"
 )
 
 func MainMenuKeyboard() *models.ReplyKeyboardMarkup {
@@ -16,28 +15,6 @@ func MainMenuKeyboard() *models.ReplyKeyboardMarkup {
 		},
 		ResizeKeyboard: true,
 	}
-}
-
-func OCREngineKeyboard(currentEngine string) [][]models.InlineKeyboardButton {
-	var buttons [][]models.InlineKeyboardButton
-	for _, e := range constants.OCREngines {
-		label := e.Label
-		if e.Name == currentEngine {
-			label = "✓ " + label
-		}
-		buttons = append(buttons, []models.InlineKeyboardButton{
-			{Text: label, CallbackData: "ocr:" + e.Name},
-		})
-	}
-	return buttons
-}
-
-func OCREngineKeyboardWithBack(currentEngine string) [][]models.InlineKeyboardButton {
-	buttons := OCREngineKeyboard(currentEngine)
-	buttons = append(buttons, []models.InlineKeyboardButton{
-		{Text: "◀️ Назад", CallbackData: "menu:main"},
-	})
-	return buttons
 }
 
 func PaginationButtons(page, totalPages int, callbackPrefix string) []models.InlineKeyboardButton {
@@ -114,15 +91,5 @@ func EmptyListButtons() [][]models.InlineKeyboardButton {
 	return [][]models.InlineKeyboardButton{
 		{{Text: "📦 Добавить пак", CallbackData: "menu:addpack"}},
 		BackButton(),
-	}
-}
-
-// FallbackButtons creates buttons for OCR fallback selection
-// setName is used to continue indexing with selected engine
-func FallbackButtons(setName string) [][]models.InlineKeyboardButton {
-	return [][]models.InlineKeyboardButton{
-		{{Text: "🔶 EasyOCR (нейросеть)", CallbackData: "fallback:easy:" + setName}},
-		{{Text: "🔷 PaddleOCR (нейросеть)", CallbackData: "fallback:paddle:" + setName}},
-		{{Text: "❌ Отменить", CallbackData: "menu:main"}},
 	}
 }

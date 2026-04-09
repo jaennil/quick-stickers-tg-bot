@@ -11,9 +11,9 @@ const (
 	ProgressUpdateInterval = 3
 
 	// Timeouts
-	HTTPTimeout      = 30 * time.Second
-	StateTTL         = 30 * time.Minute
-	InlineCacheTime  = 300 // 5 minutes in seconds
+	HTTPTimeout     = 30 * time.Second
+	StateTTL        = 30 * time.Minute
+	InlineCacheTime = 300 // 5 minutes in seconds
 )
 
 type OCREngine struct {
@@ -22,33 +22,28 @@ type OCREngine struct {
 	Desc  string
 }
 
-var OCREngines = []OCREngine{
-	{Name: "api", Label: "OCR.space", Desc: "☁️ Облачный API. Лучшее качество"},
+const OCRSpaceEngineName = "api"
+
+var DefaultOCREngine = OCREngine{
+	Name:  OCRSpaceEngineName,
+	Label: "OCR.space",
+	Desc:  "☁️ Облачный API. Остальные движки отключены.",
 }
 
 func GetEngineLabel(name string) string {
-	for _, e := range OCREngines {
-		if e.Name == name {
-			return e.Label
-		}
+	switch name {
+	case "", OCRSpaceEngineName:
+		return DefaultOCREngine.Label
+	default:
+		return name
 	}
-	return name
 }
 
 func GetEngineDesc(name string) string {
-	for _, e := range OCREngines {
-		if e.Name == name {
-			return e.Desc
-		}
+	switch name {
+	case "", OCRSpaceEngineName:
+		return DefaultOCREngine.Desc
+	default:
+		return ""
 	}
-	return ""
-}
-
-func IsValidEngine(name string) bool {
-	for _, e := range OCREngines {
-		if e.Name == name {
-			return true
-		}
-	}
-	return false
 }

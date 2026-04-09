@@ -5,19 +5,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      ocr:
-        condition: service_started
     volumes:
       - ./bot/config.yaml:/app/config.yaml:ro
-      - shared_tmp:/tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-  ocr:
-    build: ./ocr
-    restart: unless-stopped
-    volumes:
-      - shared_tmp:/tmp
 
   postgres:
     image: postgres:16-alpine
@@ -38,4 +29,3 @@ services:
 
 volumes:
   postgres_data:
-  shared_tmp:

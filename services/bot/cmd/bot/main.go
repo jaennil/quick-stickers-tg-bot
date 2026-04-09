@@ -59,7 +59,7 @@ func main() {
 			logger.Log.Fatal("telegram.token is required in config.yaml")
 		}
 
-		ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ServerURL, cfg.OCR.ProxyURL)
+		ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ProxyURL)
 
 		b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
 		if err != nil {

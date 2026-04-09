@@ -17,10 +17,11 @@ func Register(d string) {
 	goose.AddNamedMigrationContext("004_document_id.go", upDocumentID, downDocumentID)
 	goose.AddNamedMigrationContext("005_animated.go", upAnimated, downAnimated)
 	goose.AddNamedMigrationContext("006_media_type.go", upMediaType, downMediaType)
+	goose.AddNamedMigrationContext("007_drop_user_settings.go", upDropUserSettings, downDropUserSettings)
 }
 
 func upInit(ctx context.Context, tx *sql.Tx) error {
-	var stickersSQL, settingsSQL string
+	var stickersSQL string
 	if dialect == "sqlite3" {
 		stickersSQL = `
 			CREATE TABLE IF NOT EXISTS stickers (
@@ -33,11 +34,6 @@ func upInit(ctx context.Context, tx *sql.Tx) error {
 				text_lower TEXT,
 				emoji TEXT,
 				UNIQUE(user_id, sticker_id)
-			)`
-		settingsSQL = `
-			CREATE TABLE IF NOT EXISTS user_settings (
-				user_id INTEGER PRIMARY KEY,
-				ocr_engine TEXT DEFAULT 'paddle'
 			)`
 	} else {
 		stickersSQL = `
@@ -52,11 +48,6 @@ func upInit(ctx context.Context, tx *sql.Tx) error {
 				emoji TEXT,
 				UNIQUE(user_id, sticker_id)
 			)`
-		settingsSQL = `
-			CREATE TABLE IF NOT EXISTS user_settings (
-				user_id BIGINT PRIMARY KEY,
-				ocr_engine TEXT DEFAULT 'paddle'
-			)`
 	}
 
 	if _, err := tx.ExecContext(ctx, stickersSQL); err != nil {
@@ -68,16 +59,10 @@ func upInit(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_stickers_text_lower ON stickers(text_lower)"); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, settingsSQL); err != nil {
-		return err
-	}
 	return nil
 }
 
 func downInit(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS user_settings"); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, "DROP INDEX IF EXISTS idx_stickers_text_lower"); err != nil {
 		return err
 	}

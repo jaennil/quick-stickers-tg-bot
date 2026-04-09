@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-
-	"github.com/go-telegram/bot/models"
 )
 
 type AwaitingMode int
@@ -24,33 +22,24 @@ type UserState struct {
 	UpdatedAt      time.Time
 }
 
-type OCRResult struct {
-	Results   map[string]string
-	CreatedAt time.Time
-}
-
-type RemainingPack struct {
-	SetName   string
-	Stickers  []models.Sticker
+type PackSize struct {
+	Total     int
 	CreatedAt time.Time
 }
 
 type Manager struct {
-	users          map[int64]*UserState
-	usersMu        sync.RWMutex
-	pendingOCR     map[string]*OCRResult
-	ocrMu          sync.RWMutex
-	remainingPacks map[int64]*RemainingPack
-	remainingMu    sync.RWMutex
-	ttl            time.Duration
+	users     map[int64]*UserState
+	usersMu   sync.RWMutex
+	packSizes map[string]*PackSize
+	packMu    sync.RWMutex
+	ttl       time.Duration
 }
 
 func NewManager(ttl time.Duration) *Manager {
 	m := &Manager{
-		users:          make(map[int64]*UserState),
-		pendingOCR:     make(map[string]*OCRResult),
-		remainingPacks: make(map[int64]*RemainingPack),
-		ttl:            ttl,
+		users:     make(map[int64]*UserState),
+		packSizes: make(map[string]*PackSize),
+		ttl:       ttl,
 	}
 	go m.cleanupLoop()
 	return m
@@ -67,21 +56,13 @@ func (m *Manager) cleanupLoop() {
 func (m *Manager) cleanup() {
 	now := time.Now()
 
-	m.ocrMu.Lock()
-	for id, result := range m.pendingOCR {
-		if now.Sub(result.CreatedAt) > m.ttl {
-			delete(m.pendingOCR, id)
-		}
-	}
-	m.ocrMu.Unlock()
-
-	m.remainingMu.Lock()
-	for id, pack := range m.remainingPacks {
+	m.packMu.Lock()
+	for setName, pack := range m.packSizes {
 		if now.Sub(pack.CreatedAt) > m.ttl {
-			delete(m.remainingPacks, id)
+			delete(m.packSizes, setName)
 		}
 	}
-	m.remainingMu.Unlock()
+	m.packMu.Unlock()
 
 	m.usersMu.Lock()
 	for id, state := range m.users {
@@ -169,51 +150,25 @@ func (m *Manager) HasActiveIndexing(userID int64) bool {
 	return ok
 }
 
-func (m *Manager) SetPendingOCR(stickerID string, results map[string]string) {
-	m.ocrMu.Lock()
-	defer m.ocrMu.Unlock()
-	m.pendingOCR[stickerID] = &OCRResult{
-		Results:   results,
+func (m *Manager) SetPackSize(setName string, total int) {
+	if setName == "" || total <= 0 {
+		return
+	}
+
+	m.packMu.Lock()
+	defer m.packMu.Unlock()
+	m.packSizes[setName] = &PackSize{
+		Total:     total,
 		CreatedAt: time.Now(),
 	}
 }
 
-func (m *Manager) GetPendingOCR(stickerID string) (map[string]string, bool) {
-	m.ocrMu.RLock()
-	defer m.ocrMu.RUnlock()
-	if result, ok := m.pendingOCR[stickerID]; ok {
-		return result.Results, true
+func (m *Manager) GetPackSize(setName string) (int, bool) {
+	m.packMu.RLock()
+	defer m.packMu.RUnlock()
+	pack, ok := m.packSizes[setName]
+	if !ok {
+		return 0, false
 	}
-	return nil, false
-}
-
-func (m *Manager) DeletePendingOCR(stickerID string) {
-	m.ocrMu.Lock()
-	defer m.ocrMu.Unlock()
-	delete(m.pendingOCR, stickerID)
-}
-
-func (m *Manager) SetRemainingStickers(userID int64, setName string, stickers []models.Sticker) {
-	m.remainingMu.Lock()
-	defer m.remainingMu.Unlock()
-	m.remainingPacks[userID] = &RemainingPack{
-		SetName:   setName,
-		Stickers:  stickers,
-		CreatedAt: time.Now(),
-	}
-}
-
-func (m *Manager) GetRemainingStickers(userID int64) (string, []models.Sticker, bool) {
-	m.remainingMu.RLock()
-	defer m.remainingMu.RUnlock()
-	if pack, ok := m.remainingPacks[userID]; ok {
-		return pack.SetName, pack.Stickers, true
-	}
-	return "", nil, false
-}
-
-func (m *Manager) ClearRemainingStickers(userID int64) {
-	m.remainingMu.Lock()
-	defer m.remainingMu.Unlock()
-	delete(m.remainingPacks, userID)
+	return pack.Total, true
 }
