@@ -118,6 +118,20 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		b.state.SetLastSticker(userID, sticker.FileUniqueID)
 		b.state.SetAwaitingMode(userID, state.ModeEdit)
 
+		packLine := ""
+		if sticker.SetName != "" {
+			packCount, err := b.repo.GetUserPackStickerCount(userID, sticker.SetName)
+			if err != nil {
+				logger.Log.Errorw("[STICKER] failed to count stored pack stickers",
+					"set", sticker.SetName,
+					"user", userID,
+					"error", err,
+				)
+			} else {
+				packLine = fmt.Sprintf("📦 Из пака %s в базе уже %d стикеров.\n\n", sticker.SetName, packCount)
+			}
+		}
+
 		infoLine := "ℹ️ Текст ещё не задан."
 		if existing.Text != "" {
 			infoLine = fmt.Sprintf("📝 Текущий текст: \"%s\"", existing.Text)
@@ -131,7 +145,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text: "♻️ Этот стикер уже есть в базе.\n" +
-				"OCR повторно не запускаю.\n\n" +
+				packLine +
 				infoLine +
 				"\n\nОтправь новый текст следующим сообщением.",
 			ReplyMarkup: &models.InlineKeyboardMarkup{
