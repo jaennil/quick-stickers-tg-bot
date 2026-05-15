@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use grammers_client::{Client, Config, SignInError};
+use grammers_client::{Client, Config, InputMessage, SignInError};
 use grammers_session::Session;
 use grammers_tl_types as tl;
 use std::io::{self, BufRead, Write};
@@ -252,6 +252,27 @@ impl TelegramClient {
             set_name,
             document_id
         ))
+    }
+
+    pub async fn send_photo_file(&self, chat_id: i64, path: &Path) -> Result<()> {
+        info!("[send_photo_file] chat_id={}, path={:?}", chat_id, path);
+
+        info!("[send_photo_file] resolving chat...");
+        let chat = self.resolve_chat(chat_id).await?;
+        info!("[send_photo_file] chat resolved: {}", chat.name());
+
+        let uploaded = self
+            .client
+            .upload_file(path)
+            .await
+            .map_err(|e| anyhow!("Failed to upload image {:?}: {}", path, e))?;
+
+        self.client
+            .send_message(&chat, InputMessage::text("").photo(uploaded))
+            .await?;
+
+        info!("[send_photo_file] sent successfully");
+        Ok(())
     }
 
     async fn resolve_chat(&self, chat_id: i64) -> Result<grammers_client::types::Chat> {

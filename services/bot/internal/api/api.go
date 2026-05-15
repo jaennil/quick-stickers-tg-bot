@@ -11,6 +11,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -24,6 +25,7 @@ type StickerResponse struct {
 	StickerID  string `json:"sticker_id"`
 	FileID     string `json:"file_id"`
 	DocumentID int64  `json:"document_id"`
+	MediaType  string `json:"media_type"`
 	Text       string `json:"text"`
 	SetName    string `json:"set_name"`
 	Emoji      string `json:"emoji"`
@@ -201,10 +203,18 @@ func (s *Server) handleThumbnails(w http.ResponseWriter, r *http.Request) {
 }
 
 func stickerResponseFromRepo(st *repository.Sticker) StickerResponse {
+	documentID := st.DocumentID
+	if documentID == 0 && st.MediaType == repository.MediaTypeSticker {
+		if decodedDocumentID, err := fileid.DecodeDocumentID(st.FileID); err == nil {
+			documentID = decodedDocumentID
+		}
+	}
+
 	return StickerResponse{
 		StickerID:  st.StickerID,
 		FileID:     st.FileID,
-		DocumentID: st.DocumentID,
+		DocumentID: documentID,
+		MediaType:  string(st.MediaType),
 		Text:       st.Text,
 		SetName:    st.SetName,
 		Emoji:      st.Emoji,

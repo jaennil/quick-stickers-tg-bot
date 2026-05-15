@@ -524,17 +524,39 @@ impl StickerApp {
         let chat_id = chat.id;
         let set_name = sticker.set_name.clone();
         let document_id = sticker.document_id;
+        let file_id = sticker.file_id.clone();
+        let can_send_as_sticker = sticker.can_send_as_sticker();
+        let thumbnail_cache = self.thumbnail_cache.clone();
         let chat_name = chat.name.clone();
         let tx = self.send_result_tx.clone();
 
-        info!(
-            "[send] sending sticker {} to chat {}",
-            document_id, chat_name
-        );
-        self.status = "Sending...".into();
+        if can_send_as_sticker {
+            info!(
+                "[send] sending sticker {} to chat {}",
+                document_id, chat_name
+            );
+            self.status = "Sending...".into();
+        } else {
+            info!(
+                "[send] sending cached image fallback to chat {}: set_name={:?}, document_id={}, media_type={}",
+                chat_name, set_name, document_id, sticker.media_type
+            );
+            self.status = "Sending as image...".into();
+        }
 
         self.rt.spawn(async move {
-            match telegram.send_sticker(chat_id, &set_name, document_id).await {
+            let result = if can_send_as_sticker {
+                telegram.send_sticker(chat_id, &set_name, document_id).await
+            } else {
+                let cache_path = thumbnail_cache.cache_path(&file_id);
+                if thumbnail_cache.get(&file_id).await.is_none() {
+                    Err(anyhow::anyhow!("Image is not cached yet"))
+                } else {
+                    telegram.send_photo_file(chat_id, &cache_path).await
+                }
+            };
+
+            match result {
                 Ok(_) => {
                     info!("[send] success: sent to {}", chat_name);
                     if tx.send(SendResult::Success(chat_name)).is_err() {

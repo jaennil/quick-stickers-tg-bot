@@ -4,6 +4,7 @@ pub struct Sticker {
     pub file_id: String,
     pub document_id: i64,
     pub set_name: String,
+    pub media_type: String,
     pub text: String,
     pub emoji: String,
     pub ocr_engine: String,
@@ -17,6 +18,10 @@ impl Sticker {
         } else {
             &self.set_name
         }
+    }
+
+    pub fn can_send_as_sticker(&self) -> bool {
+        self.media_type == "sticker" && self.document_id != 0 && !self.set_name.is_empty()
     }
 }
 

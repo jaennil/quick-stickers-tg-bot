@@ -23,6 +23,8 @@ struct StickerResponse {
     file_id: String,
     document_id: i64,
     #[serde(default)]
+    media_type: String,
+    #[serde(default)]
     text: String,
     #[serde(default)]
     set_name: String,
@@ -47,6 +49,11 @@ impl From<StickerResponse> for Sticker {
             file_id: r.file_id,
             document_id: r.document_id,
             set_name: r.set_name,
+            media_type: if r.media_type.is_empty() {
+                "sticker".into()
+            } else {
+                r.media_type
+            },
             text: r.text,
             emoji: r.emoji,
             ocr_engine: r.ocr_engine,
