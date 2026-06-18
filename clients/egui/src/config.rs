@@ -68,7 +68,7 @@ impl Config {
         let api_id = prompt_required_parse::<i32>("Telegram api_id", None)?;
         let api_hash = prompt_required_string("Telegram api_hash", None)?;
         let api_url = prompt_required_string("Sticker API URL", Some(DEFAULT_API_URL))?;
-        let api_key = prompt_required_string("Sticker API key", None)?;
+        let api_key = prompt_optional_string("Sticker API key", None)?;
         let hotkey = prompt_required_string("Hotkey", Some(&default_hotkey()))?;
         let user_id = prompt_required_parse::<i64>("Telegram user_id", None)?;
 
@@ -99,6 +99,10 @@ fn prompt_required_string(label: &str, default: Option<&str>) -> Result<String> 
         }
         println!("Value is required.");
     }
+}
+
+fn prompt_optional_string(label: &str, default: Option<&str>) -> Result<String> {
+    prompt_line(label, default)
 }
 
 fn prompt_required_parse<T>(label: &str, default: Option<&str>) -> Result<T>

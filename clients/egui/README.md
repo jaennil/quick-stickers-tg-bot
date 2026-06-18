@@ -47,7 +47,8 @@ telegram:
 
 api:
   url: "https://sb.dubrovskih.ru/api"
-  api_key: "YOUR_API_KEY"
+  # Leave empty if the backend is not protected by X-API-Key.
+  api_key: ""
 
 hotkey: "<ctrl>+<shift>+s"
 
