@@ -78,17 +78,6 @@ impl Api {
         })
     }
 
-    pub async fn search_stickers(&self, query: &str) -> Result<Vec<Sticker>> {
-        let url = format!(
-            "{}/stickers?user_id={}&query={}",
-            self.base_url,
-            self.user_id,
-            urlencoding::encode(query)
-        );
-
-        self.fetch_stickers(&url).await
-    }
-
     pub async fn update_sticker_text(&self, sticker_id: &str, text: &str) -> Result<Sticker> {
         let url = format!(
             "{}/stickers/{}",

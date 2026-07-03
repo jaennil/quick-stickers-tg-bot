@@ -14,8 +14,8 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use api::Api;
-use app::StickerApp;
-use cache::ThumbnailCache;
+use app::{AppResources, StickerApp};
+use cache::{StickerCatalog, ThumbnailCache};
 use config::Config;
 use hotkey::{HotkeyEvent, HotkeyListener};
 use telegram::TelegramClient;
@@ -80,6 +80,18 @@ fn main() -> Result<()> {
         ThumbnailCache::new(cache_dir.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create cache at {:?}: {}", cache_dir, e))?,
     );
+    let catalog = Arc::new(
+        StickerCatalog::new(cache_dir.clone(), config.user_id)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize sticker catalog: {}", e))?,
+    );
+    let cached_stickers = match catalog.load() {
+        Ok(stickers) => stickers,
+        Err(e) => {
+            tracing::warn!("Failed to load cached sticker catalog: {}", e);
+            Vec::new()
+        }
+    };
+    println!("      Loaded {} cached stickers", cached_stickers.len());
 
     // Start hotkey listener
     println!("[7/7] Starting hotkey listener...");
@@ -109,9 +121,15 @@ fn main() -> Result<()> {
         "Sticker Search",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(StickerApp::new(
-                cc, rt, api, telegram, cache, chats, hotkey_rx,
-            )))
+            let resources = AppResources {
+                rt,
+                api,
+                telegram,
+                thumbnail_cache: cache,
+                sticker_catalog: catalog,
+                cached_stickers,
+            };
+            Ok(Box::new(StickerApp::new(cc, resources, chats, hotkey_rx)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {}", e))

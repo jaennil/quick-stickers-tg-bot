@@ -18,9 +18,9 @@ const MAX_MONITOR_WIDTH_RATIO: f32 = 0.94;
 const MAX_MONITOR_HEIGHT_RATIO: f32 = 0.92;
 
 use crate::api::Api;
-use crate::cache::ThumbnailCache;
+use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
-use crate::models::{ChatInfo, Sticker};
+use crate::models::{search_stickers, ChatInfo, Sticker};
 use crate::services::sticker_loader::StickerLoadResult;
 use crate::services::thumbnail_loader::ThumbnailResult;
 use crate::services::{ChatDetector, StickerLoader, ThumbnailLoader};
@@ -40,6 +40,15 @@ enum SendResult {
 enum EditResult {
     Success(Sticker),
     Error(String),
+}
+
+pub struct AppResources {
+    pub rt: Arc<Runtime>,
+    pub api: Arc<Api>,
+    pub telegram: Arc<TelegramClient>,
+    pub thumbnail_cache: Arc<ThumbnailCache>,
+    pub sticker_catalog: Arc<StickerCatalog>,
+    pub cached_stickers: Vec<Sticker>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +88,7 @@ pub struct StickerApp {
     selected_sticker_id: Option<String>,
     editor_text: String,
     is_saving_text: bool,
+    is_offline: bool,
 
     // Grid state
     grid_state: GridState,
@@ -102,8 +112,6 @@ pub struct StickerApp {
     hotkey_rx: Receiver<HotkeyEvent>,
 
     // Search
-    search_tx: Sender<Vec<Sticker>>,
-    search_rx: Receiver<Vec<Sticker>>,
     search_debounce: Option<Instant>,
 
     // Send sticker
@@ -126,6 +134,7 @@ pub struct StickerApp {
 
     // Thumbnail cache (for clipboard copy)
     thumbnail_cache: Arc<ThumbnailCache>,
+    sticker_catalog: Arc<StickerCatalog>,
 
     // Window sizing
     window_sized_for_monitor: Option<egui::Vec2>,
@@ -134,34 +143,38 @@ pub struct StickerApp {
 impl StickerApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        rt: Arc<Runtime>,
-        api: Arc<Api>,
-        telegram: Arc<TelegramClient>,
-        cache: Arc<ThumbnailCache>,
+        resources: AppResources,
         chats: Vec<ChatInfo>,
         hotkey_rx: Receiver<HotkeyEvent>,
     ) -> Self {
         apply_dark_theme(&cc.egui_ctx);
 
-        // Search channel
-        let (search_tx, search_rx) = mpsc::channel();
+        let AppResources {
+            rt,
+            api,
+            telegram,
+            thumbnail_cache,
+            sticker_catalog,
+            cached_stickers,
+        } = resources;
 
         // Send result channel
         let (send_result_tx, send_result_rx) = mpsc::channel();
         let (edit_result_tx, edit_result_rx) = mpsc::channel();
 
         // Start services
-        let thumbnail_loader = ThumbnailLoader::start(rt.clone(), api.clone(), cache.clone());
-        let sticker_loader = StickerLoader::start(rt.clone(), api.clone());
+        let thumbnail_loader =
+            ThumbnailLoader::start(rt.clone(), api.clone(), thumbnail_cache.clone());
+        let sticker_loader = StickerLoader::start(rt.clone(), api.clone(), sticker_catalog.clone());
         let chat_detector = ChatDetector::start(chats.clone());
 
         // Auto-select first chat
         let selected_chat = chats.first().cloned();
 
-        Self {
+        let mut app = Self {
             search_query: String::new(),
-            all_stickers: Vec::new(),
-            stickers: Vec::new(),
+            all_stickers: cached_stickers.clone(),
+            stickers: cached_stickers,
             search_results: None,
             chats,
             selected_chat,
@@ -175,6 +188,7 @@ impl StickerApp {
             selected_sticker_id: None,
             editor_text: String::new(),
             is_saving_text: false,
+            is_offline: false,
             grid_state: GridState::new(),
             grid_focused: false,
             textures: HashMap::new(),
@@ -188,8 +202,6 @@ impl StickerApp {
             api,
             telegram,
             hotkey_rx,
-            search_tx,
-            search_rx,
             search_debounce: None,
             send_result_rx,
             send_result_tx,
@@ -199,9 +211,14 @@ impl StickerApp {
             focus_search: true,
             just_sent: false,
             thumb_size: DEFAULT_THUMB_SIZE,
-            thumbnail_cache: cache,
+            thumbnail_cache,
+            sticker_catalog,
             window_sized_for_monitor: None,
-        }
+        };
+        app.rebuild_pack_stats();
+        app.select_index(0);
+        app.status = app.default_status();
+        app
     }
 
     fn desired_window_axis(
@@ -305,38 +322,39 @@ impl StickerApp {
             return;
         }
 
-        info!("[search] searching for: {:?}", query);
-        let api = self.api.clone();
-        let tx = self.search_tx.clone();
-
-        self.rt.spawn(async move {
-            match api.search_stickers(&query).await {
-                Ok(stickers) => {
-                    info!("[search] found {} stickers", stickers.len());
-                    if tx.send(stickers).is_err() {
-                        warn!("[search] result channel closed");
-                    }
-                }
-                Err(e) => {
-                    warn!("[search] error: {}", e);
-                }
-            }
-        });
+        info!("[search] searching local catalog for: {:?}", query);
+        let stickers = search_stickers(&self.all_stickers, &query);
+        info!("[search] found {} stickers locally", stickers.len());
+        self.search_results = Some(stickers);
+        self.selected_sticker_id = None;
+        self.grid_state.selected = 0;
+        self.rebuild_stickers();
+        self.status = self.default_status();
     }
 
     fn default_status(&self) -> String {
-        if self.search_results.is_some() {
+        let status = if self.search_results.is_some() {
             format!(
                 "Found {} stickers • library {}",
                 self.stickers.len(),
                 self.all_stickers.len()
             )
         } else if self.is_loading_all {
-            format!("Loading library... {}", self.all_stickers.len())
+            if self.all_stickers.is_empty() {
+                "Loading library...".into()
+            } else {
+                format!("Refreshing library... {} cached", self.all_stickers.len())
+            }
         } else if let Some(pack) = &self.pack_filter {
             format!("{} stickers • pack {}", self.stickers.len(), pack)
         } else {
             format!("{} stickers", self.stickers.len())
+        };
+
+        if self.is_offline {
+            format!("Offline • {status}")
+        } else {
+            status
         }
     }
 
@@ -473,7 +491,7 @@ impl StickerApp {
         self.select_index(previous_index.min(self.stickers.len() - 1));
     }
 
-    fn apply_updated_sticker(&mut self, updated: Sticker) -> bool {
+    fn apply_updated_sticker(&mut self, updated: Sticker) -> Result<bool, String> {
         let search_query = self.search_query.trim().to_lowercase();
         let matches_search =
             search_query.is_empty() || updated.text.to_lowercase().contains(&search_query);
@@ -505,7 +523,12 @@ impl StickerApp {
         self.rebuild_pack_stats();
         self.rebuild_stickers();
 
-        !matches_search && !search_query.is_empty()
+        if let Err(e) = self.sticker_catalog.save(&self.all_stickers) {
+            warn!("[edit] failed to update local catalog: {}", e);
+            return Err(e.to_string());
+        }
+
+        Ok(!matches_search && !search_query.is_empty())
     }
 
     fn send_sticker(&mut self) {
@@ -701,37 +724,33 @@ impl StickerApp {
         // Poll sticker loading results
         while let Some(result) = self.sticker_loader.try_recv() {
             match result {
-                StickerLoadResult::Append(new_stickers) => {
-                    debug!("[poll] appending {} stickers", new_stickers.len());
-                    self.all_stickers.extend(new_stickers);
+                StickerLoadResult::Synced(stickers) => {
+                    info!("[poll] sticker sync complete: {} total", stickers.len());
+                    self.all_stickers = stickers;
+                    self.is_loading_all = false;
+                    self.is_offline = false;
                     self.rebuild_pack_stats();
-
-                    if self.search_results.is_none() {
+                    if self.search_query.trim().is_empty() {
+                        self.search_results = None;
+                        self.rebuild_stickers();
+                    } else {
+                        self.search_results = Some(search_stickers(
+                            &self.all_stickers,
+                            self.search_query.trim(),
+                        ));
                         self.rebuild_stickers();
                     }
-
                     self.status = self.default_status();
                 }
-                StickerLoadResult::Done => {
-                    info!(
-                        "[poll] sticker loading complete: {} total",
-                        self.all_stickers.len()
-                    );
+                StickerLoadResult::Offline(error) => {
+                    warn!("[poll] API unavailable, using local catalog: {}", error);
                     self.is_loading_all = false;
+                    self.is_offline = true;
+                    self.rebuild_pack_stats();
                     self.rebuild_stickers();
                     self.status = self.default_status();
                 }
             }
-        }
-
-        // Poll search results
-        while let Ok(stickers) = self.search_rx.try_recv() {
-            debug!("[poll] received {} stickers from search", stickers.len());
-            self.search_results = Some(stickers);
-            self.selected_sticker_id = None;
-            self.grid_state.selected = 0;
-            self.rebuild_stickers();
-            self.status = self.default_status();
         }
 
         // Poll thumbnail results (limit per frame to avoid decoding hundreds at once)
@@ -815,14 +834,15 @@ impl StickerApp {
 
         while let Ok(result) = self.edit_result_rx.try_recv() {
             match result {
-                EditResult::Success(updated) => {
-                    let hidden_by_search = self.apply_updated_sticker(updated);
-                    if hidden_by_search {
+                EditResult::Success(updated) => match self.apply_updated_sticker(updated) {
+                    Ok(true) => {
                         self.status = "Text saved; sticker left current search results".into();
-                    } else {
-                        self.status = "Text saved".into();
                     }
-                }
+                    Ok(false) => self.status = "Text saved".into(),
+                    Err(e) => {
+                        self.status = format!("Text saved, local cache error: {}", e);
+                    }
+                },
                 EditResult::Error(e) => {
                     self.is_saving_text = false;
                     warn!("[poll] edit error: {}", e);

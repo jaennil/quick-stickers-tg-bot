@@ -56,3 +56,10 @@ user_id: YOUR_TELEGRAM_USER_ID
 ```
 
 Get `api_id` and `api_hash` from https://my.telegram.org
+
+## Offline mode
+
+The client stores sticker metadata and downloaded thumbnails in `~/.cache/qsg`.
+Search, pack filters, sorting, and copying cached images continue to work when the
+Sticker API is unavailable. The metadata catalog is refreshed atomically after a
+complete successful API sync, so an interrupted refresh keeps the previous catalog.
