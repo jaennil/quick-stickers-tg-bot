@@ -8,6 +8,9 @@ use tracing::{debug, info, warn};
 use crate::models::ChatInfo;
 use crate::ui::theme::CHAT_DETECT_INTERVAL_MS;
 
+const MIN_TELEGRAM_WINDOW_WIDTH: u32 = 320;
+const MIN_TELEGRAM_WINDOW_HEIGHT: u32 = 240;
+
 pub struct ChatDetector {
     result_rx: Receiver<String>,
     _handle: JoinHandle<()>,
@@ -52,12 +55,12 @@ impl ChatDetector {
 /// Detects the currently active Telegram chat by parsing window titles.
 /// Returns None if xdotool is not available or no Telegram chat is active.
 fn detect_telegram_chat() -> Option<String> {
-    let output = Command::new("xdotool")
-        .args(["search", "--class", "TelegramDesktop"])
-        .output()
-        .ok()?;
+    let output = run_xdotool(&["search", "--onlyvisible", "--class", "TelegramDesktop"])
+        .or_else(|| run_xdotool(&["search", "--class", "TelegramDesktop"]))?;
 
-    let ids: Vec<&str> = std::str::from_utf8(&output.stdout).ok()?.lines().collect();
+    let ids: Vec<&str> = output.lines().collect();
+    let mut best_chat = None;
+    let mut best_area = 0;
 
     for id in ids {
         let name_output = Command::new("xdotool")
@@ -75,20 +78,32 @@ fn detect_telegram_chat() -> Option<String> {
             continue;
         }
 
+        let Some(area) = window_area(id) else {
+            let chat_name = extract_chat_name(&name);
+            let clean = clean_unicode(&chat_name);
+            return Some(clean);
+        };
+
+        if area == 0 {
+            continue;
+        }
+
         let chat_name = extract_chat_name(&name);
         let clean = clean_unicode(&chat_name);
-
-        return Some(clean);
+        if area > best_area {
+            best_area = area;
+            best_chat = Some(clean);
+        }
     }
 
-    None
+    best_chat
 }
 
 /// Checks if window name is a system window (not a chat)
 fn is_system_window(name: &str) -> bool {
     matches!(
         name,
-        "TelegramDesktop" | "Media viewer" | "Telegram Desktop"
+        "TelegramDesktop" | "Media viewer" | "Telegram Desktop" | "Notifier"
     )
 }
 
@@ -112,4 +127,70 @@ fn clean_unicode(text: &str) -> String {
                 && *c != '\u{2069}' // POP DIRECTIONAL ISOLATE
         })
         .collect()
+}
+
+fn window_area(id: &str) -> Option<u32> {
+    let output = run_xdotool(&["getwindowgeometry", "--shell", id])?;
+    parse_window_area(&output)
+}
+
+fn run_xdotool(args: &[&str]) -> Option<String> {
+    let output = Command::new("xdotool").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(std::str::from_utf8(&output.stdout).ok()?.trim().to_string())
+}
+
+fn parse_window_area(geometry: &str) -> Option<u32> {
+    let mut width = None;
+    let mut height = None;
+
+    for line in geometry.lines() {
+        if let Some(raw) = line.strip_prefix("WIDTH=") {
+            width = raw.parse::<u32>().ok();
+        } else if let Some(raw) = line.strip_prefix("HEIGHT=") {
+            height = raw.parse::<u32>().ok();
+        }
+    }
+
+    let width = width?;
+    let height = height?;
+    if width < MIN_TELEGRAM_WINDOW_WIDTH || height < MIN_TELEGRAM_WINDOW_HEIGHT {
+        return Some(0);
+    }
+
+    Some(width.saturating_mul(height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_chat_name, is_system_window, parse_window_area};
+
+    #[test]
+    fn skips_telegram_service_windows() {
+        assert!(is_system_window("Notifier"));
+        assert!(is_system_window("Telegram Desktop"));
+        assert!(!is_system_window("гном с палкой"));
+    }
+
+    #[test]
+    fn parses_window_area_and_filters_small_windows() {
+        assert_eq!(
+            parse_window_area("WINDOW=1\nX=0\nY=0\nWIDTH=1200\nHEIGHT=800\nSCREEN=0\n"),
+            Some(960000)
+        );
+        assert_eq!(
+            parse_window_area("WINDOW=1\nWIDTH=240\nHEIGHT=120\nSCREEN=0\n"),
+            Some(0)
+        );
+        assert_eq!(parse_window_area("WINDOW=1\nWIDTH=1200\n"), None);
+    }
+
+    #[test]
+    fn extracts_chat_name_from_unread_title() {
+        assert_eq!(extract_chat_name("chat – (2)"), "chat");
+        assert_eq!(extract_chat_name("chat"), "chat");
+    }
 }
