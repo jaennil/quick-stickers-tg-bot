@@ -435,6 +435,7 @@ impl StickerApp {
     fn select_chat_from_title(&mut self, title: &str) {
         let Some(chat) = match_chat_title(&self.chats, title) else {
             debug!("[chat_detector] no chat matched window title {:?}", title);
+            self.status = format!("Chat not detected from window: {}", title);
             return;
         };
 
@@ -1016,8 +1017,9 @@ impl eframe::App for StickerApp {
                     self.visible = !self.visible;
                     info!("[hotkey] toggle, visible={}", self.visible);
                     if self.visible {
-                        if let Some(title) = active_window_title {
-                            self.select_chat_from_title(&title);
+                        match active_window_title {
+                            Some(title) => self.select_chat_from_title(&title),
+                            None => self.status = "Chat detection unavailable".into(),
                         }
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         self.focus_search = true;
@@ -1186,7 +1188,10 @@ impl eframe::App for StickerApp {
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.button("Send").clicked() {
+                        if ui
+                            .add_enabled(self.selected_chat.is_some(), egui::Button::new("Send"))
+                            .clicked()
+                        {
                             details_send = true;
                         }
                         if ui.button("Copy").clicked() {

@@ -1,15 +1,28 @@
+use std::cmp::Reverse;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use tracing::{debug, info, warn};
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, MapState, Window};
+use x11rb::rust_connection::RustConnection;
 
 use crate::models::ChatInfo;
 use crate::ui::theme::CHAT_DETECT_INTERVAL_MS;
 
 const MIN_TELEGRAM_WINDOW_WIDTH: u32 = 320;
 const MIN_TELEGRAM_WINDOW_HEIGHT: u32 = 240;
+const MAX_X11_TREE_DEPTH: usize = 8;
+
+x11rb::atom_manager! {
+    Atoms: AtomsCookie {
+        _NET_ACTIVE_WINDOW,
+        _NET_WM_NAME,
+        UTF8_STRING,
+    }
+}
 
 pub struct ChatDetector {
     result_rx: Receiver<String>,
@@ -37,6 +50,11 @@ impl ChatDetector {
                             warn!("[chat_detector] result channel closed, stopping");
                             break;
                         }
+                    } else {
+                        debug!(
+                            "[chat_detector] Telegram title did not match any chat: {:?}",
+                            title
+                        );
                     }
                 }
             }
@@ -55,9 +73,226 @@ impl ChatDetector {
     }
 }
 
+pub fn active_window_title() -> Option<String> {
+    x11_active_window_title().or_else(xdotool_active_window_title)
+}
+
 /// Detects the currently active Telegram chat by parsing window titles.
 /// Returns None if xdotool is not available or no Telegram chat is active.
 fn detect_telegram_chat_title() -> Option<String> {
+    if let Some(title) = x11_detect_telegram_chat_title() {
+        return Some(title);
+    }
+
+    xdotool_detect_telegram_chat_title()
+}
+
+fn x11_detect_telegram_chat_title() -> Option<String> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let atoms = Atoms::new(&conn).ok()?.reply().ok()?;
+    let root = conn.setup().roots.get(screen_num)?.root;
+
+    if let Some(active_window) = x11_active_window(&conn, root, &atoms) {
+        if let Some(info) = x11_telegram_window_info(&conn, &atoms, active_window) {
+            debug!(
+                "[chat_detector] active Telegram X11 window: id={}, title={:?}, class={:?}",
+                info.window, info.title, info.class
+            );
+            return Some(info.title);
+        }
+    }
+
+    let mut windows = Vec::new();
+    collect_telegram_windows(&conn, &atoms, root, 0, &mut windows);
+    windows.sort_by_key(|window| Reverse(window.area));
+
+    if let Some(info) = windows.into_iter().next() {
+        debug!(
+            "[chat_detector] largest Telegram X11 window: id={}, title={:?}, class={:?}, area={}",
+            info.window, info.title, info.class, info.area
+        );
+        return Some(info.title);
+    }
+
+    None
+}
+
+fn x11_active_window_title() -> Option<String> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let atoms = Atoms::new(&conn).ok()?.reply().ok()?;
+    let root = conn.setup().roots.get(screen_num)?.root;
+    let window = x11_active_window(&conn, root, &atoms)?;
+    let title = x11_window_title(&conn, &atoms, window)?;
+    debug!("[chat_detector] X11 active window title: {:?}", title);
+    Some(title)
+}
+
+fn x11_active_window(conn: &RustConnection, root: Window, atoms: &Atoms) -> Option<Window> {
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            atoms._NET_ACTIVE_WINDOW,
+            AtomEnum::WINDOW,
+            0,
+            1,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+
+    let window = reply.value32()?.next();
+    window
+}
+
+#[derive(Debug)]
+struct TelegramWindowInfo {
+    window: Window,
+    title: String,
+    class: String,
+    area: u32,
+}
+
+fn collect_telegram_windows(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    window: Window,
+    depth: usize,
+    out: &mut Vec<TelegramWindowInfo>,
+) {
+    if depth > MAX_X11_TREE_DEPTH {
+        return;
+    }
+
+    if let Some(info) = x11_telegram_window_info(conn, atoms, window) {
+        out.push(info);
+    }
+
+    let Ok(cookie) = conn.query_tree(window) else {
+        return;
+    };
+    let Ok(tree) = cookie.reply() else {
+        return;
+    };
+
+    for child in tree.children {
+        collect_telegram_windows(conn, atoms, child, depth + 1, out);
+    }
+}
+
+fn x11_telegram_window_info(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    window: Window,
+) -> Option<TelegramWindowInfo> {
+    let class = x11_window_class(conn, window)?;
+    if !is_telegram_class(&class) {
+        return None;
+    }
+
+    let area = x11_window_area(conn, window)?;
+    if area == 0 {
+        return None;
+    }
+
+    let title = x11_window_title(conn, atoms, window)?;
+    if is_system_window(&extract_chat_name(&clean_unicode(&title))) {
+        return None;
+    }
+
+    Some(TelegramWindowInfo {
+        window,
+        title,
+        class,
+        area,
+    })
+}
+
+fn is_telegram_class(class: &str) -> bool {
+    let class = class.to_lowercase();
+    class.contains("telegram")
+}
+
+fn x11_window_class(conn: &RustConnection, window: Window) -> Option<String> {
+    let reply = conn
+        .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 2048)
+        .ok()?
+        .reply()
+        .ok()?;
+
+    if reply.format != 8 || reply.value.is_empty() {
+        return None;
+    }
+
+    let class = String::from_utf8_lossy(&reply.value)
+        .replace('\0', " ")
+        .trim()
+        .to_string();
+    if class.is_empty() {
+        None
+    } else {
+        Some(class)
+    }
+}
+
+fn x11_window_title(conn: &RustConnection, atoms: &Atoms, window: Window) -> Option<String> {
+    x11_string_property(conn, window, atoms._NET_WM_NAME, atoms.UTF8_STRING)
+        .or_else(|| x11_string_property(conn, window, AtomEnum::WM_NAME.into(), AtomEnum::STRING))
+}
+
+fn x11_string_property(
+    conn: &RustConnection,
+    window: Window,
+    property: Atom,
+    property_type: impl Into<Atom>,
+) -> Option<String> {
+    let reply = conn
+        .get_property(false, window, property, property_type, 0, 2048)
+        .ok()?
+        .reply()
+        .ok()?;
+
+    if reply.format != 8 || reply.value.is_empty() {
+        return None;
+    }
+
+    let value = String::from_utf8_lossy(&reply.value)
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn x11_window_area(conn: &RustConnection, window: Window) -> Option<u32> {
+    let attrs = conn.get_window_attributes(window).ok()?.reply().ok()?;
+    if attrs.map_state != MapState::VIEWABLE {
+        return Some(0);
+    }
+
+    let geom = conn.get_geometry(window).ok()?.reply().ok()?;
+    let width = u32::from(geom.width);
+    let height = u32::from(geom.height);
+    if width < MIN_TELEGRAM_WINDOW_WIDTH || height < MIN_TELEGRAM_WINDOW_HEIGHT {
+        return Some(0);
+    }
+
+    Some(width.saturating_mul(height))
+}
+
+fn xdotool_active_window_title() -> Option<String> {
+    let output = run_xdotool(&["getactivewindow", "getwindowname"])?;
+    if output.is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
+fn xdotool_detect_telegram_chat_title() -> Option<String> {
     let output = run_xdotool(&["search", "--onlyvisible", "--class", "TelegramDesktop"])
         .or_else(|| run_xdotool(&["search", "--class", "TelegramDesktop"]))?;
 

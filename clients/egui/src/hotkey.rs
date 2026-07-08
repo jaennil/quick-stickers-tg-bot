@@ -2,9 +2,10 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager,
 };
-use std::process::Command;
 use std::sync::mpsc::Sender;
 use tracing::{error, info, warn};
+
+use crate::services::chat_detector::active_window_title;
 
 pub enum HotkeyEvent {
     Toggle { active_window_title: Option<String> },
@@ -160,23 +161,6 @@ impl HotkeyListener {
             _manager: manager,
             _hotkey_id: hotkey_id,
         })
-    }
-}
-
-fn active_window_title() -> Option<String> {
-    let output = Command::new("xdotool")
-        .args(["getactivewindow", "getwindowname"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let title = std::str::from_utf8(&output.stdout).ok()?.trim().to_string();
-    if title.is_empty() {
-        None
-    } else {
-        Some(title)
     }
 }
 
