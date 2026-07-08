@@ -12,6 +12,9 @@ pub const CELL_DEFAULT: egui::Color32 = egui::Color32::from_rgb(37, 37, 38);
 
 // Text colors
 pub const STATUS_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 136, 136);
+pub const STATUS_OK: egui::Color32 = egui::Color32::from_rgb(88, 166, 121);
+pub const STATUS_WARN: egui::Color32 = egui::Color32::from_rgb(210, 153, 34);
+pub const STATUS_ERROR: egui::Color32 = egui::Color32::from_rgb(218, 83, 73);
 
 // Layout constants
 pub const GRID_SPACING: f32 = 8.0;

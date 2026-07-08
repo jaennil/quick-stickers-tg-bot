@@ -29,17 +29,81 @@ use crate::ui::chat_selector::render_chat_selector;
 use crate::ui::grid::{handle_grid_navigation, render_grid, GridState};
 use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
 use crate::ui::theme::{
-    apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_TEXT,
+    apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_ERROR,
+    STATUS_OK, STATUS_TEXT, STATUS_WARN,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendMode {
+    Sticker,
+    Image,
+}
+
 enum SendResult {
-    Success(String),
+    Success { chat_name: String, mode: SendMode },
     Error(String),
 }
 
 enum EditResult {
     Success(Sticker),
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TelegramConnectionState {
+    Ready,
+    Sending,
+    SendFailed,
+}
+
+impl TelegramConnectionState {
+    fn indicator(self) -> (&'static str, egui::Color32) {
+        match self {
+            TelegramConnectionState::Ready => ("TG: Ready", STATUS_OK),
+            TelegramConnectionState::Sending => ("TG: Sending", STATUS_WARN),
+            TelegramConnectionState::SendFailed => ("TG: Send failed", STATUS_ERROR),
+        }
+    }
+}
+
+fn is_sticker_send_error(error: &str) -> bool {
+    let error = error.to_lowercase();
+    error.contains("item cannot be sent as a sticker")
+        || error.contains("stickerset_invalid")
+        || error.contains("sticker not found in set")
+        || error.contains("document_invalid")
+        || error.contains("media_invalid")
+}
+
+fn should_fallback_to_image(error: &anyhow::Error) -> bool {
+    is_sticker_send_error(&error.to_string())
+}
+
+fn friendly_send_error(error: &str) -> String {
+    let lower = error.to_lowercase();
+
+    if lower.contains("image is not cached yet") {
+        return "Telegram send failed: image is not cached yet".into();
+    }
+
+    if lower.contains("read 0 bytes")
+        || lower.contains("io failed")
+        || lower.contains("read error")
+        || lower.contains("connection reset")
+        || lower.contains("connection closed")
+    {
+        return "Telegram send failed: connection dropped, check proxy".into();
+    }
+
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return "Telegram send failed: timeout, check proxy".into();
+    }
+
+    if is_sticker_send_error(error) {
+        return "Telegram send failed: sticker rejected and image fallback failed".into();
+    }
+
+    format!("Telegram send failed: {error}")
 }
 
 pub struct AppResources {
@@ -109,6 +173,7 @@ pub struct StickerApp {
     rt: Arc<Runtime>,
     api: Arc<Api>,
     telegram: Arc<TelegramClient>,
+    telegram_state: TelegramConnectionState,
     hotkey_rx: Receiver<HotkeyEvent>,
 
     // Search
@@ -201,6 +266,7 @@ impl StickerApp {
             rt,
             api,
             telegram,
+            telegram_state: TelegramConnectionState::Ready,
             hotkey_rx,
             search_debounce: None,
             send_result_rx,
@@ -355,6 +421,16 @@ impl StickerApp {
             format!("Offline • {status}")
         } else {
             status
+        }
+    }
+
+    fn api_indicator(&self) -> (&'static str, egui::Color32) {
+        if self.is_loading_all {
+            ("API: Syncing", STATUS_WARN)
+        } else if self.is_offline {
+            ("API: Offline", STATUS_ERROR)
+        } else {
+            ("API: Online", STATUS_OK)
         }
     }
 
@@ -566,23 +642,55 @@ impl StickerApp {
             );
             self.status = "Sending as image...".into();
         }
+        self.telegram_state = TelegramConnectionState::Sending;
 
         self.rt.spawn(async move {
-            let result = if can_send_as_sticker {
-                telegram.send_sticker(chat_id, &set_name, document_id).await
+            let result: anyhow::Result<SendMode> = if can_send_as_sticker {
+                match telegram.send_sticker(chat_id, &set_name, document_id).await {
+                    Ok(()) => Ok(SendMode::Sticker),
+                    Err(sticker_error) if should_fallback_to_image(&sticker_error) => {
+                        warn!(
+                            "[send] sticker send rejected, trying image fallback: {}",
+                            sticker_error
+                        );
+                        let cache_path = thumbnail_cache.cache_path(&file_id);
+                        if thumbnail_cache.get(&file_id).await.is_none() {
+                            Err(anyhow::anyhow!(
+                                "sticker send failed ({}); image is not cached yet",
+                                sticker_error
+                            ))
+                        } else {
+                            telegram
+                                .send_photo_file(chat_id, &cache_path)
+                                .await
+                                .map(|()| SendMode::Image)
+                                .map_err(|image_error| {
+                                    anyhow::anyhow!(
+                                        "sticker send failed ({}); image fallback failed ({})",
+                                        sticker_error,
+                                        image_error
+                                    )
+                                })
+                        }
+                    }
+                    Err(sticker_error) => Err(sticker_error),
+                }
             } else {
                 let cache_path = thumbnail_cache.cache_path(&file_id);
                 if thumbnail_cache.get(&file_id).await.is_none() {
                     Err(anyhow::anyhow!("Image is not cached yet"))
                 } else {
-                    telegram.send_photo_file(chat_id, &cache_path).await
+                    telegram
+                        .send_photo_file(chat_id, &cache_path)
+                        .await
+                        .map(|()| SendMode::Image)
                 }
             };
 
             match result {
-                Ok(_) => {
+                Ok(mode) => {
                     info!("[send] success: sent to {}", chat_name);
-                    if tx.send(SendResult::Success(chat_name)).is_err() {
+                    if tx.send(SendResult::Success { chat_name, mode }).is_err() {
                         warn!("[send] result channel closed");
                     }
                 }
@@ -821,13 +929,18 @@ impl StickerApp {
         // Poll send results
         while let Ok(result) = self.send_result_rx.try_recv() {
             match result {
-                SendResult::Success(chat_name) => {
+                SendResult::Success { chat_name, mode } => {
                     info!("[poll] send success: {}", chat_name);
-                    self.status = format!("Sent to {}", chat_name);
+                    self.telegram_state = TelegramConnectionState::Ready;
+                    self.status = match mode {
+                        SendMode::Sticker => format!("Sent to {}", chat_name),
+                        SendMode::Image => format!("Sent as image to {}", chat_name),
+                    };
                 }
                 SendResult::Error(e) => {
                     warn!("[poll] send error: {}", e);
-                    self.status = format!("Error: {}", e);
+                    self.telegram_state = TelegramConnectionState::SendFailed;
+                    self.status = friendly_send_error(&e);
                 }
             }
         }
@@ -1024,6 +1137,11 @@ impl eframe::App for StickerApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(STATUS_TEXT, &self.status);
+                    ui.separator();
+                    let (tg_label, tg_color) = self.telegram_state.indicator();
+                    ui.colored_label(tg_color, tg_label);
+                    let (api_label, api_color) = self.api_indicator();
+                    ui.colored_label(api_color, api_label);
                 });
             });
         });
@@ -1270,5 +1388,31 @@ impl eframe::App for StickerApp {
         }
 
         ctx.request_repaint_after(Duration::from_millis(FRAME_TIME_MS));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{friendly_send_error, should_fallback_to_image};
+
+    #[test]
+    fn falls_back_to_image_only_for_sticker_rejections() {
+        assert!(should_fallback_to_image(&anyhow::anyhow!(
+            "rpc error 400: STICKERSET_INVALID caused by messages.getStickerSet"
+        )));
+        assert!(should_fallback_to_image(&anyhow::anyhow!(
+            "The item cannot be sent as a sticker"
+        )));
+        assert!(!should_fallback_to_image(&anyhow::anyhow!(
+            "request error: read error, IO failed: read 0 bytes"
+        )));
+    }
+
+    #[test]
+    fn telegram_network_errors_are_human_readable() {
+        assert_eq!(
+            friendly_send_error("request error: read error, IO failed: read 0 bytes"),
+            "Telegram send failed: connection dropped, check proxy"
+        );
     }
 }
