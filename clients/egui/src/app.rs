@@ -21,6 +21,7 @@ use crate::api::Api;
 use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
 use crate::models::{search_stickers, ChatInfo, Sticker};
+use crate::services::chat_detector::match_chat_title;
 use crate::services::sticker_loader::StickerLoadResult;
 use crate::services::thumbnail_loader::ThumbnailResult;
 use crate::services::{ChatDetector, StickerLoader, ThumbnailLoader};
@@ -233,16 +234,13 @@ impl StickerApp {
         let sticker_loader = StickerLoader::start(rt.clone(), api.clone(), sticker_catalog.clone());
         let chat_detector = ChatDetector::start(chats.clone());
 
-        // Auto-select first chat
-        let selected_chat = chats.first().cloned();
-
         let mut app = Self {
             search_query: String::new(),
             all_stickers: cached_stickers.clone(),
             stickers: cached_stickers,
             search_results: None,
             chats,
-            selected_chat,
+            selected_chat: None,
             status: "Loading...".into(),
             pack_filter: None,
             sort_mode: SortMode::Recent,
@@ -431,6 +429,21 @@ impl StickerApp {
             ("API: Offline", STATUS_ERROR)
         } else {
             ("API: Online", STATUS_OK)
+        }
+    }
+
+    fn select_chat_from_title(&mut self, title: &str) {
+        let Some(chat) = match_chat_title(&self.chats, title) else {
+            debug!("[chat_detector] no chat matched window title {:?}", title);
+            return;
+        };
+
+        if self.selected_chat.as_ref() != Some(&chat) {
+            info!(
+                "[chat_detector] switching to chat from active window: {}",
+                chat.name
+            );
+            self.selected_chat = Some(chat);
         }
     }
 
@@ -997,10 +1010,15 @@ impl eframe::App for StickerApp {
         // Handle hotkey
         while let Ok(event) = self.hotkey_rx.try_recv() {
             match event {
-                HotkeyEvent::Toggle => {
+                HotkeyEvent::Toggle {
+                    active_window_title,
+                } => {
                     self.visible = !self.visible;
                     info!("[hotkey] toggle, visible={}", self.visible);
                     if self.visible {
+                        if let Some(title) = active_window_title {
+                            self.select_chat_from_title(&title);
+                        }
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         self.focus_search = true;
                     }
