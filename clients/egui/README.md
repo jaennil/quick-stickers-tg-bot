@@ -44,6 +44,8 @@ Create `config.yaml`:
 telegram:
   api_id: YOUR_API_ID
   api_hash: "YOUR_API_HASH"
+  # Optional. Telegram MTProto supports SOCKS5 here; HTTP proxy is not supported.
+  proxy_url: "socks5://127.0.0.1:1080"
 
 api:
   url: "https://sb.dubrovskih.ru/api"
@@ -56,6 +58,19 @@ user_id: YOUR_TELEGRAM_USER_ID
 ```
 
 Get `api_id` and `api_hash` from https://my.telegram.org
+
+If `telegram.proxy_url` is omitted, qsg also checks `QSG_TELEGRAM_PROXY`,
+`ALL_PROXY`, `HTTPS_PROXY`, and `HTTP_PROXY`, but only uses values starting with
+`socks5://`.
+
+The shared homelab xray service is internal to Kubernetes. For local qsg usage,
+expose its SOCKS port first, for example:
+
+```sh
+kubectl -n proxy port-forward svc/xray 1080:1080
+```
+
+Then use `socks5://127.0.0.1:1080` as `telegram.proxy_url`.
 
 ## Offline mode
 

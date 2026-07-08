@@ -8,7 +8,7 @@ eframe = { version = "0.33", default-features = false, features = ["glow", "defa
 egui = "0.33"
 egui_extras = { version = "0.33", features = ["image"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
-grammers-client = "0.7"
+grammers-client = { version = "0.7", features = ["proxy"] }
 grammers-session = "0.7"
 grammers-tl-types = "0.7"
 reqwest = { version = "0.12", features = ["json"] }

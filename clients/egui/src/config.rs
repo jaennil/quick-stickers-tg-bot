@@ -18,6 +18,8 @@ pub struct Config {
 pub struct TelegramConfig {
     pub api_id: i32,
     pub api_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -28,6 +30,43 @@ pub struct ApiConfig {
 
 fn default_hotkey() -> String {
     "ctrl+shift+s".to_string()
+}
+
+fn normalize_socks5_proxy(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if value.to_lowercase().starts_with("socks5://") {
+        return Some(value.to_string());
+    }
+
+    None
+}
+
+fn env_socks5_proxy_url() -> Option<String> {
+    [
+        "QSG_TELEGRAM_PROXY",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .find_map(|value| normalize_socks5_proxy(&value))
+}
+
+impl TelegramConfig {
+    pub fn proxy_url(&self) -> Option<String> {
+        self.proxy_url
+            .as_deref()
+            .and_then(normalize_socks5_proxy)
+            .or_else(env_socks5_proxy_url)
+    }
 }
 
 impl Config {
@@ -67,13 +106,20 @@ impl Config {
 
         let api_id = prompt_required_parse::<i32>("Telegram api_id", None)?;
         let api_hash = prompt_required_string("Telegram api_hash", None)?;
+        let default_proxy = env_socks5_proxy_url();
+        let proxy_url =
+            prompt_optional_string("Telegram SOCKS5 proxy URL", default_proxy.as_deref())?;
         let api_url = prompt_required_string("Sticker API URL", Some(DEFAULT_API_URL))?;
         let api_key = prompt_optional_string("Sticker API key", None)?;
         let hotkey = prompt_required_string("Hotkey", Some(&default_hotkey()))?;
         let user_id = prompt_required_parse::<i64>("Telegram user_id", None)?;
 
         Ok(Self {
-            telegram: TelegramConfig { api_id, api_hash },
+            telegram: TelegramConfig {
+                api_id,
+                api_hash,
+                proxy_url: normalize_socks5_proxy(&proxy_url),
+            },
             api: ApiConfig {
                 url: api_url,
                 api_key,
@@ -136,4 +182,62 @@ fn prompt_line(label: &str, default: Option<&str>) -> Result<String> {
     }
 
     Ok(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_socks5_proxy, Config};
+
+    #[test]
+    fn config_without_proxy_stays_valid() {
+        let config: Config = serde_yaml::from_str(
+            r#"
+telegram:
+  api_id: 123
+  api_hash: hash
+api:
+  url: https://example.test/api
+  api_key: ""
+hotkey: ctrl+shift+s
+user_id: 42
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.telegram.api_id, 123);
+        assert_eq!(config.telegram.proxy_url, None);
+    }
+
+    #[test]
+    fn config_with_proxy_is_loaded() {
+        let config: Config = serde_yaml::from_str(
+            r#"
+telegram:
+  api_id: 123
+  api_hash: hash
+  proxy_url: socks5://127.0.0.1:1080
+api:
+  url: https://example.test/api
+  api_key: ""
+hotkey: ctrl+shift+s
+user_id: 42
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.telegram.proxy_url.as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+    }
+
+    #[test]
+    fn only_socks5_proxy_urls_are_normalized() {
+        assert_eq!(
+            normalize_socks5_proxy(" socks5://127.0.0.1:1080 "),
+            Some("socks5://127.0.0.1:1080".to_string())
+        );
+        assert_eq!(normalize_socks5_proxy("http://127.0.0.1:8080"), None);
+        assert_eq!(normalize_socks5_proxy(""), None);
+    }
 }

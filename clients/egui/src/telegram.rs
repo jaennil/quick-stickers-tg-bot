@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use grammers_client::{Client, Config, InputMessage, SignInError};
+use grammers_client::{Client, Config, InitParams, InputMessage, SignInError};
 use grammers_session::Session;
 use grammers_tl_types as tl;
 use std::io::{self, BufRead, Write};
@@ -36,11 +36,19 @@ impl TelegramClient {
         };
 
         println!("  [telegram] Connecting to Telegram servers...");
+        let proxy_url = config.proxy_url();
+        match &proxy_url {
+            Some(proxy_url) => println!("  [telegram] Using SOCKS5 proxy: {proxy_url}"),
+            None => println!("  [telegram] Proxy: direct"),
+        }
         let client = Client::connect(Config {
             session,
             api_id: config.api_id,
             api_hash: config.api_hash.clone(),
-            params: Default::default(),
+            params: InitParams {
+                proxy_url,
+                ..Default::default()
+            },
         })
         .await
         .map_err(|e| anyhow!("Failed to connect to Telegram: {}", e))?;
