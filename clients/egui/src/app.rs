@@ -1233,43 +1233,48 @@ impl eframe::App for StickerApp {
                     ));
 
                     ui.add_space(10.0);
-                    ui.label(RichText::new("Text").strong());
+                    let editor_dirty = self.editor_text != sticker.text;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Text").strong());
+                        if editor_dirty {
+                            ui.colored_label(STATUS_WARN, "Unsaved");
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    editor_dirty && !self.is_saving_text,
+                                    egui::Button::new("Save"),
+                                )
+                                .on_disabled_hover_text("No text changes")
+                                .clicked()
+                            {
+                                details_save = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    editor_dirty && !self.is_saving_text,
+                                    egui::Button::new("Reset"),
+                                )
+                                .clicked()
+                            {
+                                details_reset = true;
+                            }
+                            if self.is_saving_text {
+                                ui.spinner();
+                            }
+                        });
+                    });
                     let edit_response = ui.add_sized(
-                        [ui.available_width(), 150.0],
+                        [
+                            ui.available_width(),
+                            ui.available_height().clamp(96.0, 150.0),
+                        ],
                         egui::TextEdit::multiline(&mut self.editor_text)
                             .desired_rows(7)
                             .hint_text("Editable sticker text"),
                     );
                     editor_has_focus = edit_response.has_focus();
-
-                    let editor_dirty = self.editor_text != sticker.text;
-                    if editor_dirty {
-                        ui.colored_label(STATUS_TEXT, "Unsaved changes");
-                    }
-
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                editor_dirty && !self.is_saving_text,
-                                egui::Button::new("Save"),
-                            )
-                            .clicked()
-                        {
-                            details_save = true;
-                        }
-                        if ui
-                            .add_enabled(
-                                editor_dirty && !self.is_saving_text,
-                                egui::Button::new("Reset"),
-                            )
-                            .clicked()
-                        {
-                            details_reset = true;
-                        }
-                        if self.is_saving_text {
-                            ui.spinner();
-                        }
-                    });
+                    ui.colored_label(STATUS_TEXT, "Ctrl+S saves text");
                 } else {
                     ui.colored_label(STATUS_TEXT, "Select a sticker to inspect and edit it.");
                 }
