@@ -9,6 +9,7 @@ use crate::models::Sticker;
 
 const MAX_RETRIES: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 200;
+const HEALTH_TIMEOUT_SECS: u64 = 5;
 
 pub struct Api {
     client: Client,
@@ -141,6 +142,26 @@ impl Api {
         );
 
         self.fetch_stickers(&url).await
+    }
+
+    pub async fn health_check(&self) -> Result<()> {
+        let url = format!(
+            "{}/stickers?user_id={}&limit=1&offset=0",
+            self.base_url, self.user_id
+        );
+        let response = self
+            .client
+            .get(url)
+            .header("X-API-Key", &self.api_key)
+            .timeout(Duration::from_secs(HEALTH_TIMEOUT_SECS))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("API error: {}", response.status());
+        }
+
+        Ok(())
     }
 
     async fn fetch_stickers(&self, url: &str) -> Result<Vec<Sticker>> {

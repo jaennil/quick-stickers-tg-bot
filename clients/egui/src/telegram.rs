@@ -148,6 +148,15 @@ impl TelegramClient {
         Ok(chats)
     }
 
+    pub async fn ping(&self) -> Result<()> {
+        let ping_id = rand::random::<i64>();
+        self.client
+            .invoke(&tl::functions::Ping { ping_id })
+            .await
+            .map_err(|e| anyhow!("Telegram ping failed: {}", e))?;
+        Ok(())
+    }
+
     pub async fn send_sticker(&self, chat_id: i64, set_name: &str, document_id: i64) -> Result<()> {
         info!(
             "[send_sticker] chat_id={}, set_name={}, document_id={}",

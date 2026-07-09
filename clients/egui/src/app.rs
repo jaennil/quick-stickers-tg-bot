@@ -22,9 +22,10 @@ use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
 use crate::models::{search_stickers, ChatInfo, Sticker};
 use crate::services::chat_detector::match_chat_title;
+use crate::services::health_checker::{HealthState, HealthTarget};
 use crate::services::sticker_loader::StickerLoadResult;
 use crate::services::thumbnail_loader::ThumbnailResult;
-use crate::services::{ChatDetector, StickerLoader, ThumbnailLoader};
+use crate::services::{ChatDetector, HealthChecker, StickerLoader, ThumbnailLoader};
 use crate::telegram::TelegramClient;
 use crate::ui::chat_selector::render_chat_selector;
 use crate::ui::grid::{handle_grid_navigation, render_grid, GridState};
@@ -48,23 +49,6 @@ enum SendResult {
 enum EditResult {
     Success(Sticker),
     Error(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TelegramConnectionState {
-    Ready,
-    Sending,
-    SendFailed,
-}
-
-impl TelegramConnectionState {
-    fn indicator(self) -> (&'static str, egui::Color32) {
-        match self {
-            TelegramConnectionState::Ready => ("TG: Ready", STATUS_OK),
-            TelegramConnectionState::Sending => ("TG: Sending", STATUS_WARN),
-            TelegramConnectionState::SendFailed => ("TG: Send failed", STATUS_ERROR),
-        }
-    }
 }
 
 fn is_sticker_send_error(error: &str) -> bool {
@@ -168,13 +152,15 @@ pub struct StickerApp {
     // Services
     sticker_loader: StickerLoader,
     chat_detector: ChatDetector,
+    health_checker: HealthChecker,
     is_loading_all: bool,
 
     // Backend
     rt: Arc<Runtime>,
     api: Arc<Api>,
     telegram: Arc<TelegramClient>,
-    telegram_state: TelegramConnectionState,
+    api_health: HealthState,
+    telegram_health: HealthState,
     hotkey_rx: Receiver<HotkeyEvent>,
 
     // Search
@@ -233,6 +219,7 @@ impl StickerApp {
             ThumbnailLoader::start(rt.clone(), api.clone(), thumbnail_cache.clone());
         let sticker_loader = StickerLoader::start(rt.clone(), api.clone(), sticker_catalog.clone());
         let chat_detector = ChatDetector::start(chats.clone());
+        let health_checker = HealthChecker::start(rt.clone(), api.clone(), telegram.clone());
 
         let mut app = Self {
             search_query: String::new(),
@@ -260,11 +247,13 @@ impl StickerApp {
             thumbnail_loader,
             sticker_loader,
             chat_detector,
+            health_checker,
             is_loading_all: true,
             rt,
             api,
             telegram,
-            telegram_state: TelegramConnectionState::Ready,
+            api_health: HealthState::Checking,
+            telegram_health: HealthState::Checking,
             hotkey_rx,
             search_debounce: None,
             send_result_rx,
@@ -422,14 +411,30 @@ impl StickerApp {
         }
     }
 
-    fn api_indicator(&self) -> (&'static str, egui::Color32) {
-        if self.is_loading_all {
-            ("API: Syncing", STATUS_WARN)
-        } else if self.is_offline {
-            ("API: Offline", STATUS_ERROR)
-        } else {
-            ("API: Online", STATUS_OK)
+    fn health_indicator(prefix: &str, state: &HealthState) -> (String, egui::Color32) {
+        match state {
+            HealthState::Checking => (format!("{prefix}: Checking"), STATUS_WARN),
+            HealthState::Online => (format!("{prefix}: Online"), STATUS_OK),
+            HealthState::Offline(error) => {
+                if error.is_empty() {
+                    (format!("{prefix}: Offline"), STATUS_ERROR)
+                } else {
+                    (format!("{prefix}: Offline ({error})"), STATUS_ERROR)
+                }
+            }
         }
+    }
+
+    fn api_indicator(&self) -> (String, egui::Color32) {
+        if self.is_loading_all && matches!(self.api_health, HealthState::Checking) {
+            ("API: Syncing".into(), STATUS_WARN)
+        } else {
+            Self::health_indicator("API", &self.api_health)
+        }
+    }
+
+    fn telegram_indicator(&self) -> (String, egui::Color32) {
+        Self::health_indicator("TG", &self.telegram_health)
     }
 
     fn select_chat_from_title(&mut self, title: &str) {
@@ -656,7 +661,6 @@ impl StickerApp {
             );
             self.status = "Sending as image...".into();
         }
-        self.telegram_state = TelegramConnectionState::Sending;
 
         self.rt.spawn(async move {
             let result: anyhow::Result<SendMode> = if can_send_as_sticker {
@@ -851,6 +855,7 @@ impl StickerApp {
                     self.all_stickers = stickers;
                     self.is_loading_all = false;
                     self.is_offline = false;
+                    self.api_health = HealthState::Online;
                     self.rebuild_pack_stats();
                     if self.search_query.trim().is_empty() {
                         self.search_results = None;
@@ -868,9 +873,22 @@ impl StickerApp {
                     warn!("[poll] API unavailable, using local catalog: {}", error);
                     self.is_loading_all = false;
                     self.is_offline = true;
+                    self.api_health = HealthState::Offline("catalog refresh failed".into());
                     self.rebuild_pack_stats();
                     self.rebuild_stickers();
                     self.status = self.default_status();
+                }
+            }
+        }
+
+        while let Some(result) = self.health_checker.try_recv() {
+            match result.target {
+                HealthTarget::Api => {
+                    self.api_health = result.state;
+                    self.is_offline = matches!(self.api_health, HealthState::Offline(_));
+                }
+                HealthTarget::Telegram => {
+                    self.telegram_health = result.state;
                 }
             }
         }
@@ -945,7 +963,7 @@ impl StickerApp {
             match result {
                 SendResult::Success { chat_name, mode } => {
                     info!("[poll] send success: {}", chat_name);
-                    self.telegram_state = TelegramConnectionState::Ready;
+                    self.telegram_health = HealthState::Online;
                     self.status = match mode {
                         SendMode::Sticker => format!("Sent to {}", chat_name),
                         SendMode::Image => format!("Sent as image to {}", chat_name),
@@ -953,7 +971,7 @@ impl StickerApp {
                 }
                 SendResult::Error(e) => {
                     warn!("[poll] send error: {}", e);
-                    self.telegram_state = TelegramConnectionState::SendFailed;
+                    self.telegram_health = HealthState::Offline("send failed, check proxy".into());
                     self.status = friendly_send_error(&e);
                 }
             }
@@ -1158,7 +1176,7 @@ impl eframe::App for StickerApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(STATUS_TEXT, &self.status);
                     ui.separator();
-                    let (tg_label, tg_color) = self.telegram_state.indicator();
+                    let (tg_label, tg_color) = self.telegram_indicator();
                     ui.colored_label(tg_color, tg_label);
                     let (api_label, api_color) = self.api_indicator();
                     ui.colored_label(api_color, api_label);
