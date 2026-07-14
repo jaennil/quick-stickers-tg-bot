@@ -20,7 +20,7 @@ const MAX_MONITOR_HEIGHT_RATIO: f32 = 0.92;
 use crate::api::Api;
 use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
-use crate::models::{search_stickers, ChatInfo, Sticker};
+use crate::models::{search_stickers, sticker_matches_query, ChatInfo, Sticker};
 use crate::services::chat_detector::match_chat_title;
 use crate::services::health_checker::{HealthState, HealthTarget};
 use crate::services::sticker_loader::StickerLoadResult;
@@ -587,9 +587,9 @@ impl StickerApp {
     }
 
     fn apply_updated_sticker(&mut self, updated: Sticker) -> Result<bool, String> {
-        let search_query = self.search_query.trim().to_lowercase();
-        let matches_search =
-            search_query.is_empty() || updated.text.to_lowercase().contains(&search_query);
+        let search_query = self.search_query.trim();
+        let has_search_query = !search_query.is_empty();
+        let matches_search = !has_search_query || sticker_matches_query(&updated, search_query);
 
         if let Some(sticker) = self
             .all_stickers
@@ -623,7 +623,7 @@ impl StickerApp {
             return Err(e.to_string());
         }
 
-        Ok(!matches_search && !search_query.is_empty())
+        Ok(!matches_search && has_search_query)
     }
 
     fn send_sticker(&mut self) {

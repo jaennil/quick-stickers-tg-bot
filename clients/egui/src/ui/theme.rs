@@ -33,6 +33,7 @@ pub const FRAME_TIME_MS: u64 = 16;
 
 // Loading
 pub const STICKER_BATCH_SIZE: usize = 50;
+pub const CATALOG_REFRESH_INTERVAL_SECS: u64 = 10;
 
 pub fn apply_dark_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();

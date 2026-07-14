@@ -14,15 +14,35 @@ pub struct Sticker {
 }
 
 pub fn search_stickers(stickers: &[Sticker], query: &str) -> Vec<Sticker> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
+    if query.trim().is_empty() {
         return stickers.to_vec();
     }
 
     stickers
         .iter()
-        .filter(|sticker| sticker.text.to_lowercase().contains(&query))
+        .filter(|sticker| sticker_matches_query(sticker, query))
         .cloned()
+        .collect()
+}
+
+pub fn sticker_matches_query(sticker: &Sticker, query: &str) -> bool {
+    let text = normalize_search_text(&sticker.text);
+    normalize_search_text(query)
+        .split_whitespace()
+        .all(|term| text.contains(term))
+}
+
+fn normalize_search_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
         .collect()
 }
 
@@ -99,5 +119,18 @@ mod tests {
         assert_eq!(search_stickers(&stickers, "WORLD")[0].sticker_id, "1");
         assert_eq!(search_stickers(&stickers, "  мир ")[0].sticker_id, "2");
         assert!(search_stickers(&stickers, "missing").is_empty());
+    }
+
+    #[test]
+    fn local_search_matches_words_across_ocr_separators() {
+        let stickers = vec![
+            sticker("1", "МНЕ ТА ХОЧЕТСЯ, БЛЯ! МНЕ ЧЕТАХОЧЕТСЯ"),
+            sticker("2", "мне хочется"),
+        ];
+
+        let matches = search_stickers(&stickers, "бля мне");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].sticker_id, "1");
     }
 }
