@@ -127,7 +127,15 @@ fn short_error(error: &str) -> String {
         return "dns failed".into();
     }
 
-    error.chars().take(80).collect()
+    if lower.contains("connection refused")
+        || lower.contains("network is unreachable")
+        || lower.contains("error sending request")
+        || lower.contains("connect error")
+    {
+        return "unreachable".into();
+    }
+
+    "request failed".into()
 }
 
 #[cfg(test)]
@@ -141,5 +149,13 @@ mod tests {
             "connection dropped"
         );
         assert_eq!(short_error("operation timed out"), "timeout");
+        assert_eq!(
+            short_error("error sending request for url (https://example.test/api)"),
+            "unreachable"
+        );
+        assert_eq!(
+            short_error("unexpected transport failure"),
+            "request failed"
+        );
     }
 }

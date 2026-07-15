@@ -1172,15 +1172,21 @@ impl eframe::App for StickerApp {
 
                 ui.separator();
                 render_size_slider(ui, &mut self.thumb_size);
+            });
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.colored_label(STATUS_TEXT, &self.status);
-                    ui.separator();
-                    let (tg_label, tg_color) = self.telegram_indicator();
-                    ui.colored_label(tg_color, tg_label);
-                    let (api_label, api_color) = self.api_indicator();
-                    ui.colored_label(api_color, api_label);
-                });
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                let (api_label, api_color) = self.api_indicator();
+                ui.colored_label(api_color, api_label);
+                let (tg_label, tg_color) = self.telegram_indicator();
+                ui.colored_label(tg_color, tg_label);
+                ui.separator();
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&self.status).color(STATUS_TEXT))
+                        .truncate(),
+                )
+                .on_hover_text(&self.status);
             });
         });
 
