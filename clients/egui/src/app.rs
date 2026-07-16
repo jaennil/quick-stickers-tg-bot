@@ -971,7 +971,7 @@ impl StickerApp {
                 }
                 SendResult::Error(e) => {
                     warn!("[poll] send error: {}", e);
-                    self.telegram_health = HealthState::Offline("send failed, check proxy".into());
+                    self.telegram_health = HealthState::Offline("send failed".into());
                     self.status = friendly_send_error(&e);
                 }
             }

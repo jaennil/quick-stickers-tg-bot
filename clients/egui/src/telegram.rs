@@ -1,15 +1,23 @@
 use anyhow::{anyhow, Result};
-use grammers_client::{Client, Config, InitParams, InputMessage, SignInError};
+use grammers_client::{Client, Config, FixedReconnect, InitParams, InputMessage, SignInError};
 use grammers_session::Session;
 use grammers_tl_types as tl;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::time::Duration;
 use tracing::{error, info};
 
 use crate::config::TelegramConfig;
 use crate::models::{ChatInfo, ChatType};
 
 const SESSION_FILE: &str = "sticker_gui.session";
+const TELEGRAM_RECONNECT_DELAY_SECS: u64 = 2;
+
+// Keep the authenticated session alive across temporary proxy or network outages.
+static TELEGRAM_RECONNECT_POLICY: FixedReconnect = FixedReconnect {
+    attempts: usize::MAX,
+    delay: Duration::from_secs(TELEGRAM_RECONNECT_DELAY_SECS),
+};
 
 pub struct TelegramClient {
     client: Client,
@@ -47,6 +55,7 @@ impl TelegramClient {
             api_hash: config.api_hash.clone(),
             params: InitParams {
                 proxy_url,
+                reconnection_policy: &TELEGRAM_RECONNECT_POLICY,
                 ..Default::default()
             },
         })
@@ -305,5 +314,22 @@ impl TelegramClient {
 
         error!("[resolve_chat] chat not found: {}", chat_id);
         Err(anyhow!("Chat not found: {}", chat_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::ControlFlow;
+
+    use grammers_client::ReconnectionPolicy;
+
+    use super::{TELEGRAM_RECONNECT_DELAY_SECS, TELEGRAM_RECONNECT_POLICY};
+
+    #[test]
+    fn reconnect_policy_never_gives_up() {
+        assert!(matches!(
+            TELEGRAM_RECONNECT_POLICY.should_retry(usize::MAX),
+            ControlFlow::Continue(delay) if delay.as_secs() == TELEGRAM_RECONNECT_DELAY_SECS
+        ));
     }
 }
