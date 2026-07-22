@@ -1,4 +1,4 @@
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 BINARY = qsg
 
@@ -7,7 +7,7 @@ BINARY = qsg
 build:
 	cargo build --release
 
-install:
+install: build
 	install -Dm755 target/release/$(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
 
 uninstall:

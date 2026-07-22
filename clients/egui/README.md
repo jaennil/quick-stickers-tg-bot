@@ -31,6 +31,16 @@ cargo build --release
 cargo run --release
 ```
 
+## Install
+
+```bash
+make install
+```
+
+This installs `qsg` to `~/.local/bin/qsg` without `sudo`. Make sure
+`~/.local/bin` is included in `PATH`. System-wide installation remains
+available with `sudo make install PREFIX=/usr/local`.
+
 After `make install`, `qsg` stores config in `~/.config/qsg/config.yaml`.
 On first run it will:
 - look for `~/.config/qsg/config.yaml`
