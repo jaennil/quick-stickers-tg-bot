@@ -1,5 +1,6 @@
 use eframe::egui::{self, RichText};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -48,6 +49,11 @@ enum SendResult {
 
 enum EditResult {
     Success(Sticker),
+    Error(String),
+}
+
+enum CopyResult {
+    Ready(PathBuf),
     Error(String),
 }
 
@@ -171,6 +177,8 @@ pub struct StickerApp {
     send_result_tx: Sender<SendResult>,
     edit_result_rx: Receiver<EditResult>,
     edit_result_tx: Sender<EditResult>,
+    copy_result_rx: Receiver<CopyResult>,
+    copy_result_tx: Sender<CopyResult>,
 
     // Window visibility
     visible: bool,
@@ -213,6 +221,7 @@ impl StickerApp {
         // Send result channel
         let (send_result_tx, send_result_rx) = mpsc::channel();
         let (edit_result_tx, edit_result_rx) = mpsc::channel();
+        let (copy_result_tx, copy_result_rx) = mpsc::channel();
 
         // Start services
         let thumbnail_loader =
@@ -260,6 +269,8 @@ impl StickerApp {
             send_result_tx,
             edit_result_rx,
             edit_result_tx,
+            copy_result_rx,
+            copy_result_tx,
             visible: true,
             focus_search: true,
             just_sent: false,
@@ -723,10 +734,15 @@ impl StickerApp {
     }
 
     fn copy_sticker_to_clipboard(&mut self) {
-        let Some(sticker) = self.selected_sticker() else {
+        let Some(sticker) = self.selected_sticker().cloned() else {
             warn!("[clipboard] no sticker selected");
             return;
         };
+
+        if sticker.is_animated || sticker.is_video {
+            self.copy_animated_sticker(sticker);
+            return;
+        }
 
         let file_id = &sticker.file_id;
         let cache_path = self.thumbnail_cache.cache_path(file_id);
@@ -779,6 +795,60 @@ impl StickerApp {
             Err(e) => {
                 warn!("[clipboard] failed to read cache file: {}", e);
                 self.status = format!("Read error: {}", e);
+            }
+        }
+    }
+
+    fn copy_animated_sticker(&mut self, sticker: Sticker) {
+        if sticker.set_name.is_empty() || sticker.document_id == 0 {
+            self.status = "Animated sticker source is unavailable".into();
+            return;
+        }
+
+        let extension = if sticker.is_video { "webm" } else { "tgs" };
+        let path = self
+            .thumbnail_cache
+            .original_path(&sticker.file_id, extension);
+        if path.exists() {
+            self.put_animated_file_on_clipboard(path);
+            return;
+        }
+
+        let telegram = self.telegram.clone();
+        let tx = self.copy_result_tx.clone();
+        self.status = "Downloading animated sticker...".into();
+        self.rt.spawn(async move {
+            let partial_path = path.with_extension(format!("{}.part", extension));
+            let result = telegram
+                .download_sticker(&sticker.set_name, sticker.document_id, &partial_path)
+                .await;
+            let message = match result.and_then(|()| {
+                std::fs::rename(&partial_path, &path)
+                    .map_err(|error| anyhow::anyhow!("Failed to cache sticker: {}", error))
+            }) {
+                Ok(()) => CopyResult::Ready(path),
+                Err(error) => {
+                    let _ = std::fs::remove_file(partial_path);
+                    CopyResult::Error(error.to_string())
+                }
+            };
+            if tx.send(message).is_err() {
+                warn!("[clipboard] result channel closed");
+            }
+        });
+    }
+
+    fn put_animated_file_on_clipboard(&mut self, path: PathBuf) {
+        match arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set().file_list(&[&path]))
+        {
+            Ok(()) => {
+                info!("[clipboard] copied animated sticker file: {:?}", path);
+                self.status = "Copied animated sticker!".into();
+            }
+            Err(error) => {
+                warn!("[clipboard] failed to copy animated sticker: {}", error);
+                self.status = format!("Clipboard error: {}", error);
             }
         }
     }
@@ -992,6 +1062,16 @@ impl StickerApp {
                     self.is_saving_text = false;
                     warn!("[poll] edit error: {}", e);
                     self.status = format!("Edit error: {}", e);
+                }
+            }
+        }
+
+        while let Ok(result) = self.copy_result_rx.try_recv() {
+            match result {
+                CopyResult::Ready(path) => self.put_animated_file_on_clipboard(path),
+                CopyResult::Error(error) => {
+                    warn!("[clipboard] animated sticker download failed: {}", error);
+                    self.status = format!("Animated sticker download failed: {}", error);
                 }
             }
         }

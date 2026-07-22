@@ -148,6 +148,8 @@ mod tests {
             sticker_id: id.into(),
             file_id: format!("file-{id}"),
             document_id: 1,
+            is_animated: false,
+            is_video: false,
             set_name: "pack".into(),
             media_type: "sticker".into(),
             text: text.into(),

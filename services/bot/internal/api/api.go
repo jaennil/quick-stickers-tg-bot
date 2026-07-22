@@ -25,6 +25,8 @@ type StickerResponse struct {
 	StickerID  string `json:"sticker_id"`
 	FileID     string `json:"file_id"`
 	DocumentID int64  `json:"document_id"`
+	IsAnimated bool   `json:"is_animated"`
+	IsVideo    bool   `json:"is_video"`
 	MediaType  string `json:"media_type"`
 	Text       string `json:"text"`
 	SetName    string `json:"set_name"`
@@ -214,6 +216,8 @@ func stickerResponseFromRepo(st *repository.Sticker) StickerResponse {
 		StickerID:  st.StickerID,
 		FileID:     st.FileID,
 		DocumentID: documentID,
+		IsAnimated: st.IsAnimated,
+		IsVideo:    st.IsVideo,
 		MediaType:  string(st.MediaType),
 		Text:       st.Text,
 		SetName:    st.SetName,

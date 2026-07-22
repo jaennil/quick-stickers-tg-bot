@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use grammers_client::types::{Downloadable, Media};
 use grammers_client::{Client, Config, FixedReconnect, InitParams, InputMessage, SignInError};
 use grammers_session::Session;
 use grammers_tl_types as tl;
@@ -278,6 +279,58 @@ impl TelegramClient {
             set_name,
             document_id
         ))
+    }
+
+    pub async fn download_sticker(
+        &self,
+        set_name: &str,
+        document_id: i64,
+        path: &Path,
+    ) -> Result<()> {
+        let sticker_set = self
+            .client
+            .invoke(&tl::functions::messages::GetStickerSet {
+                stickerset: tl::enums::InputStickerSet::ShortName(
+                    tl::types::InputStickerSetShortName {
+                        short_name: set_name.to_string(),
+                    },
+                ),
+                hash: 0,
+            })
+            .await?;
+
+        let tl::enums::messages::StickerSet::Set(set) = sticker_set else {
+            return Err(anyhow!("Unexpected sticker set response"));
+        };
+
+        let document = set.documents.into_iter().find(|document| {
+            matches!(document, tl::enums::Document::Document(doc) if doc.id == document_id)
+        });
+        let Some(document) = document else {
+            return Err(anyhow!(
+                "Sticker not found in set: {} / {}",
+                set_name,
+                document_id
+            ));
+        };
+
+        let media = Media::from_raw(tl::enums::MessageMedia::Document(
+            tl::types::MessageMediaDocument {
+                nopremium: false,
+                spoiler: false,
+                video: false,
+                round: false,
+                voice: false,
+                document: Some(document),
+                alt_document: None,
+                ttl_seconds: None,
+            },
+        ))
+        .ok_or_else(|| anyhow!("Sticker document cannot be downloaded"))?;
+        self.client
+            .download_media(&Downloadable::Media(media), path)
+            .await
+            .map_err(|error| anyhow!("Failed to download sticker: {}", error))
     }
 
     pub async fn send_photo_file(&self, chat_id: i64, path: &Path) -> Result<()> {

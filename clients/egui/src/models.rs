@@ -5,6 +5,10 @@ pub struct Sticker {
     pub sticker_id: String,
     pub file_id: String,
     pub document_id: i64,
+    #[serde(default)]
+    pub is_animated: bool,
+    #[serde(default)]
+    pub is_video: bool,
     pub set_name: String,
     pub media_type: String,
     pub text: String,
@@ -99,6 +103,8 @@ mod tests {
             sticker_id: id.into(),
             file_id: format!("file-{id}"),
             document_id: 1,
+            is_animated: false,
+            is_video: false,
             set_name: "pack".into(),
             media_type: "sticker".into(),
             text: text.into(),

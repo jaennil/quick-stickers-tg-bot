@@ -24,6 +24,10 @@ struct StickerResponse {
     file_id: String,
     document_id: i64,
     #[serde(default)]
+    is_animated: bool,
+    #[serde(default)]
+    is_video: bool,
+    #[serde(default)]
     media_type: String,
     #[serde(default)]
     text: String,
@@ -49,6 +53,8 @@ impl From<StickerResponse> for Sticker {
             sticker_id: r.sticker_id,
             file_id: r.file_id,
             document_id: r.document_id,
+            is_animated: r.is_animated,
+            is_video: r.is_video,
             set_name: r.set_name,
             media_type: if r.media_type.is_empty() {
                 "sticker".into()

@@ -123,6 +123,11 @@ impl ThumbnailCache {
         let hash = format!("{:x}", md5::compute(file_id));
         self.cache_dir.join(format!("{}.png", hash))
     }
+
+    pub fn original_path(&self, file_id: &str, extension: &str) -> PathBuf {
+        let hash = format!("{:x}", md5::compute(file_id));
+        self.cache_dir.join(format!("{}.{}", hash, extension))
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +143,8 @@ mod tests {
             sticker_id: "sticker-1".into(),
             file_id: "file-1".into(),
             document_id: 123,
+            is_animated: true,
+            is_video: false,
             set_name: "pack".into(),
             media_type: "sticker".into(),
             text: "searchable text".into(),
