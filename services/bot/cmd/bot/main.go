@@ -49,7 +49,7 @@ func main() {
 	if mode == "api" {
 		// API-only mode
 		logger.Log.Info("Starting in API-only mode")
-		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token)
+		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token, cfg.OCR.ProxyURL)
 		if err := apiServer.Start(); err != nil {
 			logger.Log.Fatalf("API server error: %v", err)
 		}
@@ -67,7 +67,7 @@ func main() {
 		}
 
 		// Start API server
-		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token)
+		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token, cfg.OCR.ProxyURL)
 		go func() {
 			if err := apiServer.Start(); err != nil {
 				logger.Log.Errorf("API server error: %v", err)
