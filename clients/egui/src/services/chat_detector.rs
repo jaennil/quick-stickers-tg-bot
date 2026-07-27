@@ -196,7 +196,7 @@ fn x11_telegram_window_info(
     }
 
     let title = x11_window_title(conn, atoms, window)?;
-    if is_system_window(&extract_chat_name(&clean_unicode(&title))) {
+    if is_definite_system_window(&extract_chat_name(&clean_unicode(&title))) {
         return None;
     }
 
@@ -311,16 +311,18 @@ fn xdotool_detect_telegram_chat_title() -> Option<String> {
             .trim()
             .to_string();
 
-        // Skip non-chat windows
-        if is_system_window(&name) {
-            continue;
-        }
-
         let Some(area) = window_area(id) else {
             return Some(name);
         };
 
         if area == 0 {
+            continue;
+        }
+
+        // "Notifier" can also be a real chat name. Notification popups are
+        // filtered by their small geometry above, so only reject titles that
+        // can never represent a chat here.
+        if is_definite_system_window(&extract_chat_name(&clean_unicode(&name))) {
             continue;
         }
 
@@ -335,10 +337,6 @@ fn xdotool_detect_telegram_chat_title() -> Option<String> {
 
 pub fn match_chat_title(chats: &[ChatInfo], title: &str) -> Option<ChatInfo> {
     let title = extract_chat_name(&clean_unicode(title));
-    if is_system_window(&title) {
-        return None;
-    }
-
     let title_norm = normalize_chat_name(&title);
     if title_norm.is_empty() {
         return None;
@@ -349,6 +347,10 @@ pub fn match_chat_title(chats: &[ChatInfo], title: &str) -> Option<ChatInfo> {
         .find(|chat| normalize_chat_name(&chat.name) == title_norm)
     {
         return Some(chat.clone());
+    }
+
+    if is_system_window(&title) {
+        return None;
     }
 
     chats
@@ -374,6 +376,14 @@ fn is_system_window(name: &str) -> bool {
     matches!(
         name,
         "TelegramDesktop" | "Media viewer" | "Telegram Desktop" | "Notifier"
+    )
+}
+
+/// System titles that cannot also be legitimate Telegram chat names.
+fn is_definite_system_window(name: &str) -> bool {
+    matches!(
+        name,
+        "TelegramDesktop" | "Media viewer" | "Telegram Desktop"
     )
 }
 
@@ -531,6 +541,10 @@ mod tests {
                 .name,
             "гном с палкой"
         );
-        assert!(match_chat_title(&chats, "Notifier").is_none());
+        assert_eq!(
+            match_chat_title(&chats, "Notifier — (22094)").unwrap().name,
+            "Notifier"
+        );
+        assert!(match_chat_title(&[chat("другой чат")], "Notifier").is_none());
     }
 }
