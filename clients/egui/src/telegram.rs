@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Result};
-use grammers_client::types::{Downloadable, Media};
+use grammers_client::types::{Attribute, Downloadable, Media};
 use grammers_client::{Client, Config, FixedReconnect, InitParams, InputMessage, SignInError};
 use grammers_session::Session;
 use grammers_tl_types as tl;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 use tracing::{error, info};
 
@@ -354,6 +355,28 @@ impl TelegramClient {
         Ok(())
     }
 
+    pub async fn send_video_file(&self, chat_id: i64, path: &Path) -> Result<()> {
+        let chat = self.resolve_chat(chat_id).await?;
+        let uploaded = self
+            .client
+            .upload_file(path)
+            .await
+            .map_err(|e| anyhow!("Failed to upload video {:?}: {}", path, e))?;
+        let (width, height, duration) = probe_video(path)?;
+        let message = InputMessage::text("")
+            .mime_type("video/mp4")
+            .document(uploaded)
+            .attribute(Attribute::Video {
+                round_message: false,
+                supports_streaming: true,
+                duration: Duration::from_secs_f64(duration),
+                w: width,
+                h: height,
+            });
+        self.client.send_message(&chat, message).await?;
+        Ok(())
+    }
+
     async fn resolve_chat(&self, chat_id: i64) -> Result<grammers_client::types::Chat> {
         // Try to find in dialogs
         info!("[resolve_chat] looking for chat_id={}", chat_id);
@@ -368,6 +391,41 @@ impl TelegramClient {
         error!("[resolve_chat] chat not found: {}", chat_id);
         Err(anyhow!("Chat not found: {}", chat_id))
     }
+}
+
+fn probe_video(path: &Path) -> Result<(i32, i32, f64)> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|error| anyhow!("Failed to run ffprobe: {}", error))?;
+    if !output.status.success() {
+        return Err(anyhow!("ffprobe could not read video metadata"));
+    }
+    let metadata = String::from_utf8_lossy(&output.stdout);
+    let mut fields = metadata.trim().split(',');
+    let width = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| anyhow!("Missing video width"))?;
+    let height = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| anyhow!("Missing video height"))?;
+    let duration = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| anyhow!("Missing video duration"))?;
+    Ok((width, height, duration))
 }
 
 #[cfg(test)]

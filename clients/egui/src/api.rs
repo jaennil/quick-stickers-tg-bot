@@ -263,4 +263,23 @@ impl Api {
 
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("get_thumbnail failed after retries")))
     }
+
+    pub async fn get_media(&self, sticker_id: &str) -> Result<Vec<u8>> {
+        let url = format!(
+            "{}/media/{}?user_id={}",
+            self.base_url,
+            urlencoding::encode(sticker_id),
+            self.user_id
+        );
+        let response = self
+            .client
+            .get(url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!("API media error: {}", response.status());
+        }
+        Ok(response.bytes().await?.to_vec())
+    }
 }

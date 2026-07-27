@@ -6,17 +6,17 @@ Desktop client for searching and sending stickers via Telegram.
 
 ### Ubuntu/Debian
 ```bash
-sudo apt install libssl-dev pkg-config libxdo-dev
+sudo apt install ffmpeg libssl-dev pkg-config libxdo-dev
 ```
 
 ### Fedora
 ```bash
-sudo dnf install openssl-devel pkg-config libxdo-devel
+sudo dnf install ffmpeg openssl-devel pkg-config libxdo-devel
 ```
 
 ### Arch
 ```bash
-sudo pacman -S openssl pkg-config xdotool
+sudo pacman -S ffmpeg openssl pkg-config xdotool
 ```
 
 ## Build

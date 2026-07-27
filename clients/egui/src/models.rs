@@ -62,6 +62,10 @@ impl Sticker {
     pub fn can_send_as_sticker(&self) -> bool {
         self.media_type == "sticker" && self.document_id != 0 && !self.set_name.is_empty()
     }
+
+    pub fn is_video_media(&self) -> bool {
+        self.media_type == "video" || self.is_video
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,9 +17,11 @@ import (
 )
 
 type Server struct {
-	repo   repository.Repository
-	apiKey string
-	port   int
+	repo          repository.Repository
+	apiKey        string
+	port          int
+	telegramToken string
+	httpClient    *http.Client
 }
 
 type StickerResponse struct {
@@ -40,11 +43,13 @@ type UpdateStickerRequest struct {
 	Text   string `json:"text"`
 }
 
-func New(cfg config.APIConfig, repo repository.Repository) *Server {
+func New(cfg config.APIConfig, repo repository.Repository, telegramToken string) *Server {
 	return &Server{
-		repo:   repo,
-		apiKey: cfg.APIKey,
-		port:   cfg.Port,
+		repo:          repo,
+		apiKey:        cfg.APIKey,
+		port:          cfg.Port,
+		telegramToken: telegramToken,
+		httpClient:    &http.Client{},
 	}
 }
 
@@ -53,6 +58,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stickers", s.authMiddleware(s.handleStickers))
 	mux.HandleFunc("/api/stickers/", s.authMiddleware(s.handleStickerByID))
 	mux.HandleFunc("/api/thumbnails/", s.authMiddleware(s.handleThumbnails))
+	mux.HandleFunc("/api/media/", s.authMiddleware(s.handleMedia))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	addr := fmt.Sprintf(":%d", s.port)
@@ -202,6 +208,77 @@ func (s *Server) handleThumbnails(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(thumbnail)
+}
+
+func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, err := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid user_id", http.StatusBadRequest)
+		return
+	}
+	stickerID, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/media/"))
+	if err != nil || stickerID == "" {
+		http.Error(w, "invalid sticker_id", http.StatusBadRequest)
+		return
+	}
+	media, err := s.repo.GetSticker(userID, stickerID)
+	if err != nil || media == nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	if s.telegramToken == "" {
+		http.Error(w, "Telegram media unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	getFileURL := fmt.Sprintf("https://api.telegram.org/bot%s/getFile?file_id=%s", s.telegramToken, url.QueryEscape(media.FileID))
+	response, err := s.httpClient.Get(getFileURL)
+	if err != nil {
+		http.Error(w, "Failed to resolve media", http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	var fileResponse struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&fileResponse) != nil || !fileResponse.OK {
+		http.Error(w, "Failed to resolve media", http.StatusBadGateway)
+		return
+	}
+
+	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", s.telegramToken, fileResponse.Result.FilePath)
+	download, err := s.httpClient.Get(downloadURL)
+	if err != nil {
+		http.Error(w, "Failed to download media", http.StatusBadGateway)
+		return
+	}
+	defer download.Body.Close()
+	if download.StatusCode != http.StatusOK {
+		http.Error(w, "Failed to download media", http.StatusBadGateway)
+		return
+	}
+
+	if contentType := download.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	} else if media.MediaType == repository.MediaTypeVideo {
+		w.Header().Set("Content-Type", "video/mp4")
+	}
+	w.Header().Set("Content-Disposition", "attachment")
+	if contentLength := download.Header.Get("Content-Length"); contentLength != "" {
+		w.Header().Set("Content-Length", contentLength)
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, download.Body); err != nil {
+		logger.Log.Warnw("[API] failed to stream media", "media", stickerID, "error", err)
+	}
 }
 
 func stickerResponseFromRepo(st *repository.Sticker) StickerResponse {

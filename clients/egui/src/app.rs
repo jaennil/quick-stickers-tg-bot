@@ -40,6 +40,7 @@ use crate::ui::theme::{
 enum SendMode {
     Sticker,
     Image,
+    Video,
 }
 
 enum SendResult {
@@ -655,6 +656,9 @@ impl StickerApp {
         let document_id = sticker.document_id;
         let file_id = sticker.file_id.clone();
         let can_send_as_sticker = sticker.can_send_as_sticker();
+        let is_video = sticker.is_video_media();
+        let sticker_id = sticker.sticker_id.clone();
+        let api = self.api.clone();
         let thumbnail_cache = self.thumbnail_cache.clone();
         let chat_name = chat.name.clone();
         let tx = self.send_result_tx.clone();
@@ -665,6 +669,8 @@ impl StickerApp {
                 document_id, chat_name
             );
             self.status = "Sending...".into();
+        } else if is_video {
+            self.status = "Sending video...".into();
         } else {
             info!(
                 "[send] sending cached image fallback to chat {}: set_name={:?}, document_id={}, media_type={}",
@@ -704,6 +710,23 @@ impl StickerApp {
                     }
                     Err(sticker_error) => Err(sticker_error),
                 }
+            } else if is_video {
+                let path = thumbnail_cache.original_path(&file_id, "mp4");
+                let prepare_result = if path.exists() {
+                    Ok(())
+                } else {
+                    match api.get_media(&sticker_id).await {
+                        Ok(data) => std::fs::write(&path, data).map_err(anyhow::Error::from),
+                        Err(error) => Err(error),
+                    }
+                };
+                match prepare_result {
+                    Ok(()) => telegram
+                        .send_video_file(chat_id, &path)
+                        .await
+                        .map(|()| SendMode::Video),
+                    Err(error) => Err(error),
+                }
             } else {
                 let cache_path = thumbnail_cache.cache_path(&file_id);
                 if thumbnail_cache.get(&file_id).await.is_none() {
@@ -738,6 +761,11 @@ impl StickerApp {
             warn!("[clipboard] no sticker selected");
             return;
         };
+
+        if sticker.media_type == "video" {
+            self.copy_video(sticker);
+            return;
+        }
 
         if sticker.is_animated || sticker.is_video {
             self.copy_animated_sticker(sticker);
@@ -835,6 +863,28 @@ impl StickerApp {
             if tx.send(message).is_err() {
                 warn!("[clipboard] result channel closed");
             }
+        });
+    }
+
+    fn copy_video(&mut self, sticker: Sticker) {
+        let path = self.thumbnail_cache.original_path(&sticker.file_id, "mp4");
+        if path.exists() {
+            self.put_animated_file_on_clipboard(path);
+            return;
+        }
+        let api = self.api.clone();
+        let tx = self.copy_result_tx.clone();
+        self.status = "Downloading video...".into();
+        self.rt.spawn(async move {
+            let result = api.get_media(&sticker.sticker_id).await.and_then(|data| {
+                std::fs::write(&path, data)
+                    .map_err(|error| anyhow::anyhow!("Failed to cache video: {}", error))
+            });
+            let message = match result {
+                Ok(()) => CopyResult::Ready(path),
+                Err(error) => CopyResult::Error(error.to_string()),
+            };
+            let _ = tx.send(message);
         });
     }
 
@@ -1037,6 +1087,7 @@ impl StickerApp {
                     self.status = match mode {
                         SendMode::Sticker => format!("Sent to {}", chat_name),
                         SendMode::Image => format!("Sent as image to {}", chat_name),
+                        SendMode::Video => format!("Sent video to {}", chat_name),
                     };
                 }
                 SendResult::Error(e) => {
