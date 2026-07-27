@@ -13,10 +13,10 @@ resources:
 images:
 - name: api
   newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
-  newTag: df44f325a4353de7a2a749863cf1b21c3420bc3d
+  newTag: 6e8ca493956aba2e8175254e7db659d650213e17
 - name: bot
   newName: ghcr.io/jaennil/quick-stickers-tg-bot/bot
-  newTag: df44f325a4353de7a2a749863cf1b21c3420bc3d
+  newTag: 6e8ca493956aba2e8175254e7db659d650213e17
 - name: xray
   newName: teddysun/xray
   newTag: 1.8.24
