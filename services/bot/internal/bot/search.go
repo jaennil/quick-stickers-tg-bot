@@ -9,7 +9,6 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/jaennil/sticker-search-bot/internal/constants"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
-	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/ui"
 )
 
@@ -44,7 +43,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 		logger.Log.Infow("[SEARCH] no results", "user", userID, "query", query)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
-			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
+			Text:   fmt.Sprintf("Медиа с текстом \"%s\" не найдено", query),
 			ReplyMarkup: &models.InlineKeyboardMarkup{
 				InlineKeyboard: ui.SearchAgainButtons(),
 			},
@@ -59,17 +58,8 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 	}
 
 	for i := 0; i < limit; i++ {
-		media := stickers[i]
-		if media.MediaType == repository.MediaTypePhoto {
-			tgBot.SendPhoto(ctx, &bot.SendPhotoParams{
-				ChatID: chatID,
-				Photo:  &models.InputFileString{Data: media.FileID},
-			})
-		} else {
-			tgBot.SendSticker(ctx, &bot.SendStickerParams{
-				ChatID:  chatID,
-				Sticker: &models.InputFileString{Data: media.FileID},
-			})
+		if err := sendStoredMedia(ctx, tgBot, chatID, stickers[i]); err != nil {
+			logger.Log.Warnw("[SEARCH] failed to send result", "media", stickers[i].StickerID, "error", err)
 		}
 	}
 
@@ -106,7 +96,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 		logger.Log.Infow("[TEXT] no results", "user", userID, "query", query)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("Стикеров с текстом \"%s\" не найдено", query),
+			Text:   fmt.Sprintf("Медиа с текстом \"%s\" не найдено", query),
 		})
 		return
 	}
@@ -118,17 +108,8 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 	}
 
 	for i := 0; i < limit; i++ {
-		media := stickers[i]
-		if media.MediaType == repository.MediaTypePhoto {
-			tgBot.SendPhoto(ctx, &bot.SendPhotoParams{
-				ChatID: update.Message.Chat.ID,
-				Photo:  &models.InputFileString{Data: media.FileID},
-			})
-		} else {
-			tgBot.SendSticker(ctx, &bot.SendStickerParams{
-				ChatID:  update.Message.Chat.ID,
-				Sticker: &models.InputFileString{Data: media.FileID},
-			})
+		if err := sendStoredMedia(ctx, tgBot, update.Message.Chat.ID, stickers[i]); err != nil {
+			logger.Log.Warnw("[TEXT] failed to send result", "media", stickers[i].StickerID, "error", err)
 		}
 	}
 }
@@ -152,18 +133,7 @@ func (b *Bot) handleInlineQuery(ctx context.Context, tgBot *bot.Bot, update *mod
 			}
 
 			for i := 0; i < limit; i++ {
-				media := stickers[i]
-				if media.MediaType == repository.MediaTypePhoto {
-					results = append(results, &models.InlineQueryResultCachedPhoto{
-						ID:          fmt.Sprintf("%d_%s", i, media.StickerID),
-						PhotoFileID: media.FileID,
-					})
-				} else {
-					results = append(results, &models.InlineQueryResultCachedSticker{
-						ID:            fmt.Sprintf("%d_%s", i, media.StickerID),
-						StickerFileID: media.FileID,
-					})
-				}
+				results = append(results, cachedInlineMedia(i, stickers[i]))
 			}
 			logger.Log.Infow("[INLINE] found", "user", userID, "query", query, "total", len(stickers), "returned", limit)
 		}

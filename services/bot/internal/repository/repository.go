@@ -5,6 +5,7 @@ type MediaType string
 const (
 	MediaTypeSticker MediaType = "sticker"
 	MediaTypePhoto   MediaType = "photo"
+	MediaTypeVideo   MediaType = "video"
 )
 
 type Sticker struct {

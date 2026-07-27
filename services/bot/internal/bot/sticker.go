@@ -37,6 +37,11 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 	}
 
+	if update.Message.Video != nil {
+		b.handleVideo(ctx, tgBot, update)
+		return
+	}
+
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
@@ -59,7 +64,7 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 	case "📊 Статистика":
 		count, _ := b.repo.GetUserStickerCount(userID)
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("📊 Статистика\n\nСохранено стикеров: %d", count)})
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("📊 Статистика\n\nСохранено медиа: %d", count)})
 		return
 	case "❓ Помощь":
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❓ Помощь\n\n" + helpTextShort})

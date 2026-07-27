@@ -50,12 +50,13 @@ func (b *Bot) sendSettings(ctx context.Context, tgBot *bot.Bot, chatID int64, me
 func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int64, userID int64, page int) {
 	total, _ := b.repo.GetUserStickerCount(userID)
 	photoCount, _ := b.repo.GetUserMediaCount(userID, repository.MediaTypePhoto)
-	stickerCount := total - photoCount
+	videoCount, _ := b.repo.GetUserMediaCount(userID, repository.MediaTypeVideo)
+	stickerCount := total - photoCount - videoCount
 
 	if total == 0 {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
-			Text:   "📋 У тебя пока нет сохранённых стикеров или картинок.\n\nОтправь мне стикер, картинку или добавь целый пак!",
+			Text:   "📋 У тебя пока нет сохранённых медиа.\n\nОтправь мне стикер, картинку, видео или добавь целый пак!",
 		})
 		return
 	}
@@ -73,6 +74,9 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	}
 	if photoCount > 0 {
 		msgBuilder.WriteString(fmt.Sprintf("  🖼 Картинок: %d\n", photoCount))
+	}
+	if videoCount > 0 {
+		msgBuilder.WriteString(fmt.Sprintf("  🎬 Видео: %d\n", videoCount))
 	}
 	msgBuilder.WriteString("\n")
 
@@ -99,6 +103,9 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	}
 	if photoCount > 0 {
 		buttons = append(buttons, []models.InlineKeyboardButton{{Text: fmt.Sprintf("🖼 Картинки (%d)", photoCount), CallbackData: "media:photo:1"}})
+	}
+	if videoCount > 0 {
+		buttons = append(buttons, []models.InlineKeyboardButton{{Text: fmt.Sprintf("🎬 Видео (%d)", videoCount), CallbackData: "media:video:1"}})
 	}
 	buttons = append(buttons, []models.InlineKeyboardButton{{Text: "📜 Все медиа", CallbackData: "allstickers:1"}})
 	buttons = append(buttons, ui.BackToMenuButton())
@@ -141,16 +148,8 @@ func (b *Bot) sendAllStickers(ctx context.Context, tgBot *bot.Bot, chatID int64,
 			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(st.OCREngine))
 		}
 
-		if st.MediaType == repository.MediaTypePhoto {
-			tgBot.SendPhoto(ctx, &bot.SendPhotoParams{
-				ChatID: chatID,
-				Photo:  &models.InputFileString{Data: st.FileID},
-			})
-		} else {
-			tgBot.SendSticker(ctx, &bot.SendStickerParams{
-				ChatID:  chatID,
-				Sticker: &models.InputFileString{Data: st.FileID},
-			})
+		if err := sendStoredMedia(ctx, tgBot, chatID, st); err != nil {
+			logger.Log.Warnw("[LIST] failed to send media", "media", st.StickerID, "error", err)
 		}
 
 		msgText := fmt.Sprintf("Текст: %s", text)
@@ -252,8 +251,11 @@ func (b *Bot) sendMediaByType(ctx context.Context, tgBot *bot.Bot, chatID int64,
 	total, _ := b.repo.GetUserMediaCount(userID, mediaType)
 
 	typeName := "🎭 Стикеры"
-	if mediaType == repository.MediaTypePhoto {
+	switch mediaType {
+	case repository.MediaTypePhoto:
 		typeName = "🖼 Картинки"
+	case repository.MediaTypeVideo:
+		typeName = "🎬 Видео"
 	}
 
 	if total == 0 {
@@ -285,16 +287,8 @@ func (b *Bot) sendMediaByType(ctx context.Context, tgBot *bot.Bot, chatID int64,
 			infoLine = fmt.Sprintf("🔍 %s", constants.GetEngineLabel(m.OCREngine))
 		}
 
-		if mediaType == repository.MediaTypePhoto {
-			tgBot.SendPhoto(ctx, &bot.SendPhotoParams{
-				ChatID: chatID,
-				Photo:  &models.InputFileString{Data: m.FileID},
-			})
-		} else {
-			tgBot.SendSticker(ctx, &bot.SendStickerParams{
-				ChatID:  chatID,
-				Sticker: &models.InputFileString{Data: m.FileID},
-			})
+		if err := sendStoredMedia(ctx, tgBot, chatID, m); err != nil {
+			logger.Log.Warnw("[LIST] failed to send media", "media", m.StickerID, "error", err)
 		}
 
 		msgText := fmt.Sprintf("Текст: %s", text)

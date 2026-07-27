@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -458,11 +461,7 @@ func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, st
 			return "", err
 		}
 	case StickerTypeVideo:
-		// WEBM - extract first frame using ffmpeg
-		if err := extractVideoFrame(ctx, tmpFile.Name(), pngPath); err != nil {
-			logger.Log.Warnw("[OCR] WEBM frame extraction failed", "error", err)
-			return "", err
-		}
+		return i.recognizeVideoFrames(ctx, tmpFile.Name(), pngPath)
 	default:
 		// Static WebP - convert to PNG
 		if err := convertWebPToPNG(ctx, tmpFile.Name(), pngPath); err != nil {
@@ -471,6 +470,50 @@ func (i *Indexer) DownloadAndOCRWithType(ctx context.Context, fileURL string, st
 	}
 
 	return i.ocr.RecognizeText(ctx, pngPath)
+}
+
+// recognizeVideoFrames checks the first frame and then one frame per second
+// until OCR finds text or the video ends.
+func (i *Indexer) recognizeVideoFrames(ctx context.Context, videoPath, pngPath string) (string, error) {
+	duration, err := videoDuration(ctx, videoPath)
+	if err != nil {
+		logger.Log.Warnw("[OCR] failed to read video duration; checking first frame only", "error", err)
+		duration = 1
+	}
+
+	samples := max(1, int(math.Ceil(duration)))
+	for second := range samples {
+		if err := extractVideoFrameAt(ctx, videoPath, pngPath, float64(second)); err != nil {
+			return "", err
+		}
+
+		text, err := i.ocr.RecognizeText(ctx, pngPath)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) != "" {
+			logger.Log.Debugw("[OCR] found text in video", "second", second)
+			return text, nil
+		}
+	}
+
+	return "", nil
+}
+
+func videoDuration(ctx context.Context, videoPath string) (float64, error) {
+	output, err := exec.CommandContext(ctx,
+		"ffprobe", "-v", "error", "-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1", videoPath,
+	).Output()
+	if err != nil {
+		return 0, err
+	}
+
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("invalid video duration %q", strings.TrimSpace(string(output)))
+	}
+	return duration, nil
 }
 
 // extractTGSFrame extracts the first frame from a TGS (Lottie) file
@@ -512,9 +555,13 @@ export_gif(animation, sys.argv[2], skip_frames=0)
 	return exec.CommandContext(ctx, "convert", gifPath+"[0]", pngPath).Run()
 }
 
-// extractVideoFrame extracts the first frame from a WEBM video
-func extractVideoFrame(ctx context.Context, webmPath, pngPath string) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", webmPath, "-vframes", "1", "-f", "image2", pngPath)
+// extractVideoFrame extracts the first frame from a video.
+func extractVideoFrame(ctx context.Context, videoPath, pngPath string) error {
+	return extractVideoFrameAt(ctx, videoPath, pngPath, 0)
+}
+
+func extractVideoFrameAt(ctx context.Context, videoPath, pngPath string, second float64) error {
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-ss", strconv.FormatFloat(second, 'f', 3, 64), "-i", videoPath, "-vframes", "1", "-f", "image2", pngPath)
 	return cmd.Run()
 }
 
