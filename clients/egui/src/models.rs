@@ -64,7 +64,11 @@ impl Sticker {
     }
 
     pub fn is_video_media(&self) -> bool {
-        self.media_type == "video" || self.is_video
+        self.media_type == "video" || (self.media_type == "sticker" && self.is_video)
+    }
+
+    pub fn is_gif_media(&self) -> bool {
+        self.media_type == "gif"
     }
 }
 
@@ -116,6 +120,17 @@ mod tests {
             ocr_engine: String::new(),
             manual_edit: false,
         }
+    }
+
+    #[test]
+    fn gif_is_not_classified_as_video_media() {
+        let mut gif = sticker("gif", "text");
+        gif.media_type = "gif".into();
+        gif.is_animated = true;
+        gif.is_video = true;
+
+        assert!(gif.is_gif_media());
+        assert!(!gif.is_video_media());
     }
 
     #[test]

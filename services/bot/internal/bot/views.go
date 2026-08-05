@@ -51,7 +51,8 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	total, _ := b.repo.GetUserStickerCount(userID)
 	photoCount, _ := b.repo.GetUserMediaCount(userID, repository.MediaTypePhoto)
 	videoCount, _ := b.repo.GetUserMediaCount(userID, repository.MediaTypeVideo)
-	stickerCount := total - photoCount - videoCount
+	gifCount, _ := b.repo.GetUserMediaCount(userID, repository.MediaTypeGIF)
+	stickerCount := total - photoCount - videoCount - gifCount
 
 	if total == 0 {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -77,6 +78,9 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	}
 	if videoCount > 0 {
 		msgBuilder.WriteString(fmt.Sprintf("  🎬 Видео: %d\n", videoCount))
+	}
+	if gifCount > 0 {
+		msgBuilder.WriteString(fmt.Sprintf("  🎞 GIF: %d\n", gifCount))
 	}
 	msgBuilder.WriteString("\n")
 
@@ -106,6 +110,9 @@ func (b *Bot) sendStickerListMsg(ctx context.Context, tgBot *bot.Bot, chatID int
 	}
 	if videoCount > 0 {
 		buttons = append(buttons, []models.InlineKeyboardButton{{Text: fmt.Sprintf("🎬 Видео (%d)", videoCount), CallbackData: "media:video:1"}})
+	}
+	if gifCount > 0 {
+		buttons = append(buttons, []models.InlineKeyboardButton{{Text: fmt.Sprintf("🎞 GIF (%d)", gifCount), CallbackData: "media:gif:1"}})
 	}
 	buttons = append(buttons, []models.InlineKeyboardButton{{Text: "📜 Все медиа", CallbackData: "allstickers:1"}})
 	buttons = append(buttons, ui.BackToMenuButton())
@@ -256,6 +263,8 @@ func (b *Bot) sendMediaByType(ctx context.Context, tgBot *bot.Bot, chatID int64,
 		typeName = "🖼 Картинки"
 	case repository.MediaTypeVideo:
 		typeName = "🎬 Видео"
+	case repository.MediaTypeGIF:
+		typeName = "🎞 GIF"
 	}
 
 	if total == 0 {

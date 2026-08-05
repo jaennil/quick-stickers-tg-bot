@@ -42,6 +42,11 @@ func (b *Bot) defaultHandler(ctx context.Context, tgBot *bot.Bot, update *models
 		return
 	}
 
+	if update.Message.Animation != nil {
+		b.handleAnimation(ctx, tgBot, update)
+		return
+	}
+
 	userID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text

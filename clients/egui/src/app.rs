@@ -1,6 +1,7 @@
 use eframe::egui::{self, RichText};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,6 +42,7 @@ enum SendMode {
     Sticker,
     Image,
     Video,
+    Gif,
 }
 
 enum SendResult {
@@ -96,6 +98,38 @@ fn friendly_send_error(error: &str) -> String {
     }
 
     format!("Telegram send failed: {error}")
+}
+
+fn cache_gif(path: &std::path::Path, data: Vec<u8>, source_is_video: bool) -> anyhow::Result<()> {
+    if !source_is_video {
+        std::fs::write(path, data)?;
+        return Ok(());
+    }
+
+    let source_path = path.with_extension("source.mp4");
+    let converted_path = path.with_extension("converted.gif");
+    std::fs::write(&source_path, data)?;
+
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(&source_path)
+        .args(["-an", "-f", "gif"])
+        .arg(&converted_path)
+        .output()
+        .map_err(|error| anyhow::anyhow!("Failed to run ffmpeg: {}", error));
+    let _ = std::fs::remove_file(&source_path);
+
+    let output = output?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&converted_path);
+        anyhow::bail!(
+            "Failed to convert Telegram animation to GIF: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    std::fs::rename(&converted_path, path)
+        .map_err(|error| anyhow::anyhow!("Failed to cache GIF: {}", error))
 }
 
 pub struct AppResources {
@@ -656,7 +690,9 @@ impl StickerApp {
         let document_id = sticker.document_id;
         let file_id = sticker.file_id.clone();
         let can_send_as_sticker = sticker.can_send_as_sticker();
+        let is_gif = sticker.is_gif_media();
         let is_video = sticker.is_video_media();
+        let gif_source_is_video = sticker.is_video;
         let sticker_id = sticker.sticker_id.clone();
         let api = self.api.clone();
         let thumbnail_cache = self.thumbnail_cache.clone();
@@ -669,6 +705,8 @@ impl StickerApp {
                 document_id, chat_name
             );
             self.status = "Sending...".into();
+        } else if is_gif {
+            self.status = "Sending GIF...".into();
         } else if is_video {
             self.status = "Sending video...".into();
         } else {
@@ -709,6 +747,23 @@ impl StickerApp {
                         }
                     }
                     Err(sticker_error) => Err(sticker_error),
+                }
+            } else if is_gif {
+                let path = thumbnail_cache.original_path(&file_id, "gif");
+                let prepare_result = if path.exists() {
+                    Ok(())
+                } else {
+                    match api.get_media(&sticker_id).await {
+                        Ok(data) => cache_gif(&path, data, gif_source_is_video),
+                        Err(error) => Err(error),
+                    }
+                };
+                match prepare_result {
+                    Ok(()) => telegram
+                        .send_gif_file(chat_id, &path)
+                        .await
+                        .map(|()| SendMode::Gif),
+                    Err(error) => Err(error),
                 }
             } else if is_video {
                 let path = thumbnail_cache.original_path(&file_id, "mp4");
@@ -761,6 +816,11 @@ impl StickerApp {
             warn!("[clipboard] no sticker selected");
             return;
         };
+
+        if sticker.is_gif_media() {
+            self.copy_gif(sticker);
+            return;
+        }
 
         if sticker.media_type == "video" {
             self.copy_video(sticker);
@@ -880,6 +940,29 @@ impl StickerApp {
                 std::fs::write(&path, data)
                     .map_err(|error| anyhow::anyhow!("Failed to cache video: {}", error))
             });
+            let message = match result {
+                Ok(()) => CopyResult::Ready(path),
+                Err(error) => CopyResult::Error(error.to_string()),
+            };
+            let _ = tx.send(message);
+        });
+    }
+
+    fn copy_gif(&mut self, sticker: Sticker) {
+        let path = self.thumbnail_cache.original_path(&sticker.file_id, "gif");
+        if path.exists() {
+            self.put_animated_file_on_clipboard(path);
+            return;
+        }
+        let api = self.api.clone();
+        let tx = self.copy_result_tx.clone();
+        let source_is_video = sticker.is_video;
+        self.status = "Downloading GIF...".into();
+        self.rt.spawn(async move {
+            let result = api
+                .get_media(&sticker.sticker_id)
+                .await
+                .and_then(|data| cache_gif(&path, data, source_is_video));
             let message = match result {
                 Ok(()) => CopyResult::Ready(path),
                 Err(error) => CopyResult::Error(error.to_string()),
@@ -1088,6 +1171,7 @@ impl StickerApp {
                         SendMode::Sticker => format!("Sent to {}", chat_name),
                         SendMode::Image => format!("Sent as image to {}", chat_name),
                         SendMode::Video => format!("Sent video to {}", chat_name),
+                        SendMode::Gif => format!("Sent GIF to {}", chat_name),
                     };
                 }
                 SendResult::Error(e) => {

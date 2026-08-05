@@ -347,6 +347,8 @@ func (b *Bot) handleMediaCallback(ctx context.Context, tgBot *bot.Bot, update *m
 		mediaType = repository.MediaTypePhoto
 	case "video":
 		mediaType = repository.MediaTypeVideo
+	case "gif":
+		mediaType = repository.MediaTypeGIF
 	}
 
 	b.sendMediaByType(ctx, tgBot, chatID, userID, mediaType, page)

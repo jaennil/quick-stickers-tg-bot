@@ -6,6 +6,7 @@ const (
 	MediaTypeSticker MediaType = "sticker"
 	MediaTypePhoto   MediaType = "photo"
 	MediaTypeVideo   MediaType = "video"
+	MediaTypeGIF     MediaType = "gif"
 )
 
 type Sticker struct {

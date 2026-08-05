@@ -377,6 +377,20 @@ impl TelegramClient {
         Ok(())
     }
 
+    pub async fn send_gif_file(&self, chat_id: i64, path: &Path) -> Result<()> {
+        let chat = self.resolve_chat(chat_id).await?;
+        let uploaded = self
+            .client
+            .upload_file(path)
+            .await
+            .map_err(|e| anyhow!("Failed to upload GIF {:?}: {}", path, e))?;
+        let message = InputMessage::text("")
+            .mime_type("image/gif")
+            .document(uploaded);
+        self.client.send_message(&chat, message).await?;
+        Ok(())
+    }
+
     async fn resolve_chat(&self, chat_id: i64) -> Result<grammers_client::types::Chat> {
         // Try to find in dialogs
         info!("[resolve_chat] looking for chat_id={}", chat_id);
