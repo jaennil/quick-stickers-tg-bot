@@ -271,6 +271,95 @@ func (r *BaseRepository) GetUserMediaByType(userID int64, mediaType MediaType, l
 	return scanStickers(rows)
 }
 
+func (r *BaseRepository) EnqueueMediaJob(job *MediaJob) error {
+	query := r.db.Rebind(`
+		INSERT INTO media_jobs (user_id, chat_id, progress_message_id, sticker_id, file_id, media_type)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, sticker_id) DO UPDATE SET
+			chat_id = EXCLUDED.chat_id,
+			progress_message_id = EXCLUDED.progress_message_id,
+			file_id = EXCLUDED.file_id,
+			media_type = EXCLUDED.media_type,
+			status = 'pending',
+			attempts = 0,
+			last_error = '',
+			updated_at = CURRENT_TIMESTAMP
+	`)
+	_, err := r.db.Exec(query, job.UserID, job.ChatID, job.ProgressMessageID, job.StickerID, job.FileID, job.MediaType)
+	return err
+}
+
+func (r *BaseRepository) UpdateMediaJobProgressMessage(userID int64, stickerID string, messageID int) error {
+	query := r.db.Rebind(`
+		UPDATE media_jobs SET progress_message_id = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND sticker_id = ?
+	`)
+	_, err := r.db.Exec(query, messageID, userID, stickerID)
+	return err
+}
+
+func (r *BaseRepository) RequeueProcessingMediaJobs() error {
+	_, err := r.db.Exec(`
+		UPDATE media_jobs SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'processing'
+	`)
+	return err
+}
+
+func (r *BaseRepository) ClaimNextMediaJob() (*MediaJob, error) {
+	tx, err := r.db.Beginx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var job MediaJob
+	query := r.db.Rebind(`
+		SELECT id, user_id, chat_id, progress_message_id, sticker_id, file_id, media_type, attempts
+		FROM media_jobs WHERE status = 'pending' ORDER BY attempts, id LIMIT 1
+	`)
+	if err := tx.QueryRow(query).Scan(
+		&job.ID, &job.UserID, &job.ChatID, &job.ProgressMessageID,
+		&job.StickerID, &job.FileID, &job.MediaType, &job.Attempts,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	result, err := tx.Exec(r.db.Rebind(`
+		UPDATE media_jobs SET status = 'processing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = 'pending'
+	`), job.ID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	job.Attempts++
+	return &job, nil
+}
+
+func (r *BaseRepository) RetryMediaJob(id int64, lastError string) error {
+	query := r.db.Rebind(`
+		UPDATE media_jobs SET status = 'pending', last_error = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`)
+	_, err := r.db.Exec(query, lastError, id)
+	return err
+}
+
+func (r *BaseRepository) CompleteMediaJob(id int64) error {
+	_, err := r.db.Exec(r.db.Rebind("DELETE FROM media_jobs WHERE id = ?"), id)
+	return err
+}
+
 func (r *BaseRepository) Close() error {
 	return r.db.Close()
 }

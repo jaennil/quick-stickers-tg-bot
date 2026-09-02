@@ -25,6 +25,17 @@ type Sticker struct {
 	MediaType  MediaType
 }
 
+type MediaJob struct {
+	ID                int64
+	UserID            int64
+	ChatID            int64
+	ProgressMessageID int
+	StickerID         string
+	FileID            string
+	MediaType         MediaType
+	Attempts          int
+}
+
 type PackStats struct {
 	SetName      string
 	Total        int
@@ -49,6 +60,14 @@ type Repository interface {
 	// Media type filtering
 	GetUserMediaCount(userID int64, mediaType MediaType) (int, error)
 	GetUserMediaByType(userID int64, mediaType MediaType, limit, offset int) ([]*Sticker, error)
+
+	// Durable media processing queue
+	EnqueueMediaJob(job *MediaJob) error
+	UpdateMediaJobProgressMessage(userID int64, stickerID string, messageID int) error
+	RequeueProcessingMediaJobs() error
+	ClaimNextMediaJob() (*MediaJob, error)
+	RetryMediaJob(id int64, lastError string) error
+	CompleteMediaJob(id int64) error
 
 	// Thumbnails
 	SaveThumbnail(fileID string, thumbnail []byte) error

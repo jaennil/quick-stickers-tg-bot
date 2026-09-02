@@ -19,6 +19,7 @@ type Bot struct {
 	ocr     *ocr.OCR
 	indexer *service.Indexer
 	state   *state.Manager
+	queueCh chan struct{}
 }
 
 func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
@@ -27,6 +28,7 @@ func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
 		ocr:     ocr,
 		indexer: service.NewIndexer(repo, ocr),
 		state:   state.NewManager(constants.StateTTL),
+		queueCh: make(chan struct{}, 1),
 	}
 
 	opts := []bot.Option{
@@ -67,5 +69,6 @@ func (b *Bot) registerHandlers() {
 
 func (b *Bot) Start(ctx context.Context) {
 	logger.Log.Info("Bot started")
+	go b.runMediaQueue(ctx)
 	b.bot.Start(ctx)
 }
