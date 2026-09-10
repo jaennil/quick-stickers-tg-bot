@@ -1,5 +1,6 @@
 # Environment
 .env
+services/bot/config.yaml
 .venv
 .venv/
 scripts/

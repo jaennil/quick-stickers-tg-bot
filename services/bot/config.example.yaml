@@ -1,5 +1,5 @@
 telegram:
-  token: "8158905082:AAEnRNikWoM2W3RyGtwQqD5AfJgEWHmWLgY"
+  token: "YOUR_TELEGRAM_BOT_TOKEN"
 
 database:
   driver: "postgres"
@@ -8,6 +8,4 @@ database:
 ocr:
   proxy_url: "socks5://xray.proxy.svc.cluster.local:1080"  # in Kubernetes use shared xray service; for Docker use host.docker.internal:2080
   space_api_keys:
-  - "K81763554688957"
-  - "K84899834788957"
-  - "K83802716488957"
+  - "YOUR_OCR_SPACE_API_KEY"
