@@ -3,10 +3,11 @@ package repository
 type MediaType string
 
 const (
-	MediaTypeSticker MediaType = "sticker"
-	MediaTypePhoto   MediaType = "photo"
-	MediaTypeVideo   MediaType = "video"
-	MediaTypeGIF     MediaType = "gif"
+	MediaTypeSticker   MediaType = "sticker"
+	MediaTypePhoto     MediaType = "photo"
+	MediaTypeVideo     MediaType = "video"
+	MediaTypeVideoFile MediaType = "video_file"
+	MediaTypeGIF       MediaType = "gif"
 )
 
 type Sticker struct {

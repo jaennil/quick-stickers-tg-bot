@@ -64,7 +64,9 @@ impl Sticker {
     }
 
     pub fn is_video_media(&self) -> bool {
-        self.media_type == "video" || (self.media_type == "sticker" && self.is_video)
+        self.media_type == "video"
+            || self.media_type == "video_file"
+            || (self.media_type == "sticker" && self.is_video)
     }
 
     pub fn is_gif_media(&self) -> bool {
@@ -131,6 +133,14 @@ mod tests {
 
         assert!(gif.is_gif_media());
         assert!(!gif.is_video_media());
+    }
+
+    #[test]
+    fn video_document_is_classified_as_video_media() {
+        let mut video = sticker("video-file", "text");
+        video.media_type = "video_file".into();
+
+        assert!(video.is_video_media());
     }
 
     #[test]

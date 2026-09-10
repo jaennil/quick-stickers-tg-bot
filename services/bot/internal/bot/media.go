@@ -18,6 +18,9 @@ func sendStoredMedia(ctx context.Context, tgBot *bot.Bot, chatID int64, media *r
 	case repository.MediaTypeVideo:
 		_, err := tgBot.SendVideo(ctx, &bot.SendVideoParams{ChatID: chatID, Video: file})
 		return err
+	case repository.MediaTypeVideoFile:
+		_, err := tgBot.SendDocument(ctx, &bot.SendDocumentParams{ChatID: chatID, Document: file})
+		return err
 	case repository.MediaTypeGIF:
 		_, err := tgBot.SendAnimation(ctx, &bot.SendAnimationParams{ChatID: chatID, Animation: file})
 		return err
@@ -38,6 +41,12 @@ func cachedInlineMedia(index int, media *repository.Sticker) models.InlineQueryR
 			title = "Видео"
 		}
 		return &models.InlineQueryResultCachedVideo{ID: id, VideoFileID: media.FileID, Title: title}
+	case repository.MediaTypeVideoFile:
+		title := media.Text
+		if title == "" {
+			title = "Видео-файл"
+		}
+		return &models.InlineQueryResultCachedDocument{ID: id, DocumentFileID: media.FileID, Title: title}
 	case repository.MediaTypeGIF:
 		title := media.Text
 		if title == "" {

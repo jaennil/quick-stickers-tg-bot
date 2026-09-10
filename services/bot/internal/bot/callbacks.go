@@ -347,6 +347,8 @@ func (b *Bot) handleMediaCallback(ctx context.Context, tgBot *bot.Bot, update *m
 		mediaType = repository.MediaTypePhoto
 	case "video":
 		mediaType = repository.MediaTypeVideo
+	case "video_file":
+		mediaType = repository.MediaTypeVideoFile
 	case "gif":
 		mediaType = repository.MediaTypeGIF
 	}

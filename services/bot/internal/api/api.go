@@ -304,7 +304,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	if contentType := download.Header.Get("Content-Type"); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
-	} else if media.MediaType == repository.MediaTypeVideo {
+	} else if media.MediaType == repository.MediaTypeVideo || media.MediaType == repository.MediaTypeVideoFile {
 		w.Header().Set("Content-Type", "video/mp4")
 	} else if media.MediaType == repository.MediaTypeGIF {
 		if media.IsVideo {

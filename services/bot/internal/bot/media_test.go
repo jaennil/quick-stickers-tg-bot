@@ -75,3 +75,20 @@ func TestCachedInlineMediaGIF(t *testing.T) {
 		})
 	}
 }
+
+func TestCachedInlineMediaVideoDocument(t *testing.T) {
+	result := cachedInlineMedia(3, &repository.Sticker{
+		StickerID: "video-document-unique-id",
+		FileID:    "video-document-file-id",
+		Text:      "распознанный текст",
+		MediaType: repository.MediaTypeVideoFile,
+	})
+
+	document, ok := result.(*models.InlineQueryResultCachedDocument)
+	if !ok {
+		t.Fatalf("expected cached document, got %T", result)
+	}
+	if document.DocumentFileID != "video-document-file-id" || document.Title != "распознанный текст" {
+		t.Fatalf("unexpected document result: %#v", document)
+	}
+}
