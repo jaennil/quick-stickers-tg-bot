@@ -117,6 +117,83 @@ func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, e
 	return scanStickers(rows)
 }
 
+func (r *BaseRepository) GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT ` + stickerSelectFields + `
+		FROM stickers
+		WHERE ai_embedding IS NULL
+		   OR COALESCE(ai_embedding_model, '') != ?
+		   OR COALESCE(ai_embedding_text, '') != COALESCE(text, '')
+		   OR COALESCE(ai_embedding_file_id, '') != file_id
+		ORDER BY ai_embedding_attempted_at IS NOT NULL, ai_embedding_attempted_at, id DESC
+		LIMIT ?
+	`)
+	rows, err := r.db.Query(query, model, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanStickers(rows)
+}
+
+func (r *BaseRepository) MarkEmbeddingAttempt(userID int64, stickerID string) error {
+	query := r.db.Rebind(`
+		UPDATE stickers SET ai_embedding_attempted_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND sticker_id = ?
+	`)
+	_, err := r.db.Exec(query, userID, stickerID)
+	return err
+}
+
+func (r *BaseRepository) SaveEmbedding(
+	userID int64,
+	stickerID string,
+	model string,
+	sourceText string,
+	sourceFileID string,
+	embedding []byte,
+) error {
+	query := r.db.Rebind(`
+		UPDATE stickers SET
+			ai_embedding = ?,
+			ai_embedding_model = ?,
+			ai_embedding_text = ?,
+			ai_embedding_file_id = ?,
+			ai_embedding_attempted_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND sticker_id = ?
+	`)
+	_, err := r.db.Exec(query, embedding, model, sourceText, sourceFileID, userID, stickerID)
+	return err
+}
+
+func (r *BaseRepository) GetUserEmbeddings(userID int64, model string) ([]*EmbeddedSticker, error) {
+	query := r.db.Rebind(`
+		SELECT ` + stickerSelectFields + `, ai_embedding
+		FROM stickers
+		WHERE user_id = ? AND ai_embedding_model = ? AND ai_embedding IS NOT NULL
+	`)
+	rows, err := r.db.Query(query, userID, model)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*EmbeddedSticker
+	for rows.Next() {
+		var st Sticker
+		var embedding []byte
+		if err := rows.Scan(
+			&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID,
+			&st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit,
+			&st.IsAnimated, &st.IsVideo, &st.MediaType, &embedding,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, &EmbeddedSticker{Sticker: &st, Embedding: embedding})
+	}
+	return result, rows.Err()
+}
+
 func (r *BaseRepository) GetUserStickerCount(userID int64) (int, error) {
 	var count int
 	err := r.db.Get(&count, r.db.Rebind("SELECT COUNT(*) FROM stickers WHERE user_id = ?"), userID)

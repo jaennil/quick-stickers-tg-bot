@@ -43,6 +43,11 @@ type PackStats struct {
 	ManualEdited int
 }
 
+type EmbeddedSticker struct {
+	Sticker   *Sticker
+	Embedding []byte
+}
+
 type Repository interface {
 	// Stickers
 	SaveSticker(sticker *Sticker) error
@@ -57,6 +62,10 @@ type Repository interface {
 	GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error)
 	GetUserPackStickerCount(userID int64, setName string) (int, error)
 	DeleteUserPack(userID int64, setName string) error
+	GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error)
+	MarkEmbeddingAttempt(userID int64, stickerID string) error
+	SaveEmbedding(userID int64, stickerID, model, sourceText, sourceFileID string, embedding []byte) error
+	GetUserEmbeddings(userID int64, model string) ([]*EmbeddedSticker, error)
 
 	// Media type filtering
 	GetUserMediaCount(userID int64, mediaType MediaType) (int, error)
