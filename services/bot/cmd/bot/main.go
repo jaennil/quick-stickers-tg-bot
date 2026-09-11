@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/jaennil/sticker-search-bot/internal/ai"
 	"github.com/jaennil/sticker-search-bot/internal/api"
 	"github.com/jaennil/sticker-search-bot/internal/bot"
 	"github.com/jaennil/sticker-search-bot/internal/config"
@@ -15,6 +17,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/repository/postgres"
 	"github.com/jaennil/sticker-search-bot/internal/repository/sqlite"
+	"github.com/jaennil/sticker-search-bot/internal/semantic"
 )
 
 func main() {
@@ -46,10 +49,23 @@ func main() {
 		cancel()
 	}()
 
+	var embedder ai.Embedder
+	if cfg.AI.Token != "" {
+		embedder = ai.NewClient(cfg.AI.BaseURL, cfg.AI.Token, cfg.AI.Model, cfg.AI.Dimensions)
+	}
+	semanticSearch := semantic.New(
+		repo,
+		embedder,
+		cfg.Telegram.Token,
+		cfg.OCR.ProxyURL,
+		cfg.AI.MinScore,
+		time.Duration(cfg.AI.IndexIntervalSeconds)*time.Second,
+	)
+
 	if mode == "api" {
 		// API-only mode
 		logger.Log.Info("Starting in API-only mode")
-		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token, cfg.OCR.ProxyURL)
+		apiServer := api.New(cfg.API, repo, semanticSearch, cfg.Telegram.Token, cfg.OCR.ProxyURL)
 		if err := apiServer.Start(); err != nil {
 			logger.Log.Fatalf("API server error: %v", err)
 		}
@@ -61,19 +77,20 @@ func main() {
 
 		ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ProxyURL)
 
-		b, err := bot.New(cfg.Telegram.Token, repo, ocrService)
+		b, err := bot.New(cfg.Telegram.Token, repo, ocrService, semanticSearch)
 		if err != nil {
 			logger.Log.Fatalf("Failed to create bot: %v", err)
 		}
 
 		// Start API server
-		apiServer := api.New(cfg.API, repo, cfg.Telegram.Token, cfg.OCR.ProxyURL)
+		apiServer := api.New(cfg.API, repo, semanticSearch, cfg.Telegram.Token, cfg.OCR.ProxyURL)
 		go func() {
 			if err := apiServer.Start(); err != nil {
 				logger.Log.Errorf("API server error: %v", err)
 			}
 		}()
 
+		go semanticSearch.RunIndexer(ctx)
 		b.Start(ctx)
 	}
 }

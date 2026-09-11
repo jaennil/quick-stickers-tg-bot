@@ -26,7 +26,7 @@ func (b *Bot) doSearch(ctx context.Context, tgBot *bot.Bot, chatID int64, userID
 		return
 	}
 
-	stickers, err := b.repo.SearchByText(userID, query)
+	stickers, err := b.search.Search(ctx, userID, query)
 	if err != nil {
 		logger.Log.Errorw("[SEARCH] error", "user", userID, "query", query, "error", err)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
@@ -87,7 +87,7 @@ func (b *Bot) handleTextSearch(ctx context.Context, tgBot *bot.Bot, update *mode
 		return
 	}
 
-	stickers, err := b.repo.SearchByText(userID, query)
+	stickers, err := b.search.Search(ctx, userID, query)
 	if err != nil {
 		logger.Log.Errorw("[TEXT] search error", "user", userID, "query", query, "error", err)
 		return
@@ -122,7 +122,7 @@ func (b *Bot) handleInlineQuery(ctx context.Context, tgBot *bot.Bot, update *mod
 	var results []models.InlineQueryResult
 
 	if len(query) >= constants.MinSearchLength {
-		stickers, err := b.repo.SearchByText(userID, query)
+		stickers, err := b.search.Search(ctx, userID, query)
 		if err != nil {
 			logger.Log.Errorw("[INLINE] search error", "user", userID, "query", query, "error", err)
 		} else {

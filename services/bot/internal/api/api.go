@@ -15,6 +15,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/semantic"
 	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/proxy"
@@ -22,6 +23,7 @@ import (
 
 type Server struct {
 	repo          repository.Repository
+	search        *semantic.Service
 	apiKey        string
 	port          int
 	telegramToken string
@@ -47,9 +49,10 @@ type UpdateStickerRequest struct {
 	Text   string `json:"text"`
 }
 
-func New(cfg config.APIConfig, repo repository.Repository, telegramToken, proxyURL string) *Server {
+func New(cfg config.APIConfig, repo repository.Repository, search *semantic.Service, telegramToken, proxyURL string) *Server {
 	return &Server{
 		repo:          repo,
+		search:        search,
 		apiKey:        cfg.APIKey,
 		port:          cfg.Port,
 		telegramToken: telegramToken,
@@ -152,7 +155,7 @@ func (s *Server) handleStickers(w http.ResponseWriter, r *http.Request) {
 		stickers, err = s.repo.GetUserStickers(userID, limit, offset)
 	} else {
 		logger.Log.Debugw("searching stickers", "user_id", userID, "query", query)
-		stickers, err = s.repo.SearchByText(userID, query)
+		stickers, err = s.search.Search(r.Context(), userID, query)
 	}
 
 	if err != nil {

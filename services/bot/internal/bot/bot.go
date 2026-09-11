@@ -9,6 +9,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/ocr"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
+	"github.com/jaennil/sticker-search-bot/internal/semantic"
 	"github.com/jaennil/sticker-search-bot/internal/service"
 	"github.com/jaennil/sticker-search-bot/internal/state"
 )
@@ -20,15 +21,17 @@ type Bot struct {
 	indexer *service.Indexer
 	state   *state.Manager
 	queueCh chan struct{}
+	search  *semantic.Service
 }
 
-func New(token string, repo repository.Repository, ocr *ocr.OCR) (*Bot, error) {
+func New(token string, repo repository.Repository, ocr *ocr.OCR, search *semantic.Service) (*Bot, error) {
 	b := &Bot{
 		repo:    repo,
 		ocr:     ocr,
 		indexer: service.NewIndexer(repo, ocr),
 		state:   state.NewManager(constants.StateTTL),
 		queueCh: make(chan struct{}, 1),
+		search:  search,
 	}
 
 	opts := []bot.Option{
