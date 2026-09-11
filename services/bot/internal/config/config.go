@@ -11,6 +11,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	OCR      OCRConfig      `yaml:"ocr"`
 	API      APIConfig      `yaml:"api"`
+	AI       AIConfig       `yaml:"ai"`
 }
 
 type TelegramConfig struct {
@@ -32,6 +33,15 @@ type OCRConfig struct {
 type APIConfig struct {
 	Port   int    `yaml:"port"`
 	APIKey string `yaml:"api_key"`
+}
+
+type AIConfig struct {
+	Token                string  `yaml:"token"`
+	BaseURL              string  `yaml:"base_url"`
+	Model                string  `yaml:"model"`
+	Dimensions           int     `yaml:"dimensions"`
+	MinScore             float64 `yaml:"min_score"`
+	IndexIntervalSeconds int     `yaml:"index_interval_seconds"`
 }
 
 func Load(path string) (*Config, error) {
@@ -60,6 +70,21 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.API.Port == 0 {
 		cfg.API.Port = 8080
+	}
+	if cfg.AI.BaseURL == "" {
+		cfg.AI.BaseURL = "https://api.aitunnel.ru/v1"
+	}
+	if cfg.AI.Model == "" {
+		cfg.AI.Model = "gemini-embedding-2"
+	}
+	if cfg.AI.Dimensions == 0 {
+		cfg.AI.Dimensions = 768
+	}
+	if cfg.AI.MinScore == 0 {
+		cfg.AI.MinScore = 0.25
+	}
+	if cfg.AI.IndexIntervalSeconds == 0 {
+		cfg.AI.IndexIntervalSeconds = 2
 	}
 
 	return &cfg, nil

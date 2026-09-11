@@ -9,3 +9,11 @@ ocr:
   proxy_url: "socks5://xray.proxy.svc.cluster.local:1080"  # in Kubernetes use shared xray service; for Docker use host.docker.internal:2080
   space_api_keys:
   - "YOUR_OCR_SPACE_API_KEY"
+
+ai:
+  token: "YOUR_AITUNNEL_TOKEN"
+  base_url: "https://api.aitunnel.ru/v1"
+  model: "gemini-embedding-2"
+  dimensions: 768
+  min_score: 0.25
+  index_interval_seconds: 2
