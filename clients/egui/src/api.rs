@@ -150,6 +150,16 @@ impl Api {
         self.fetch_stickers(&url).await
     }
 
+    pub async fn search_stickers(&self, query: &str) -> Result<Vec<Sticker>> {
+        let url = format!(
+            "{}/stickers?user_id={}&query={}",
+            self.base_url,
+            self.user_id,
+            urlencoding::encode(query)
+        );
+        self.fetch_stickers(&url).await
+    }
+
     pub async fn health_check(&self) -> Result<()> {
         let url = format!(
             "{}/stickers?user_id={}&limit=1&offset=0",

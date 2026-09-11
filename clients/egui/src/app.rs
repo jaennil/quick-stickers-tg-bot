@@ -60,6 +60,17 @@ enum CopyResult {
     Error(String),
 }
 
+enum SearchResult {
+    Success {
+        query: String,
+        stickers: Vec<Sticker>,
+    },
+    Error {
+        query: String,
+        error: String,
+    },
+}
+
 fn is_sticker_send_error(error: &str) -> bool {
     let error = error.to_lowercase();
     error.contains("item cannot be sent as a sticker")
@@ -206,6 +217,8 @@ pub struct StickerApp {
 
     // Search
     search_debounce: Option<Instant>,
+    search_result_rx: Receiver<SearchResult>,
+    search_result_tx: Sender<SearchResult>,
 
     // Send sticker
     send_result_rx: Receiver<SendResult>,
@@ -257,6 +270,7 @@ impl StickerApp {
         let (send_result_tx, send_result_rx) = mpsc::channel();
         let (edit_result_tx, edit_result_rx) = mpsc::channel();
         let (copy_result_tx, copy_result_rx) = mpsc::channel();
+        let (search_result_tx, search_result_rx) = mpsc::channel();
 
         // Start services
         let thumbnail_loader =
@@ -300,6 +314,8 @@ impl StickerApp {
             telegram_health: HealthState::Checking,
             hotkey_rx,
             search_debounce: None,
+            search_result_rx,
+            search_result_tx,
             send_result_rx,
             send_result_tx,
             edit_result_rx,
@@ -421,14 +437,35 @@ impl StickerApp {
             return;
         }
 
-        info!("[search] searching local catalog for: {:?}", query);
-        let stickers = search_stickers(&self.all_stickers, &query);
-        info!("[search] found {} stickers locally", stickers.len());
-        self.search_results = Some(stickers);
-        self.selected_sticker_id = None;
-        self.grid_state.selected = 0;
-        self.rebuild_stickers();
-        self.status = self.default_status();
+        if self.is_offline {
+            info!(
+                "[search] API offline; searching local catalog for: {:?}",
+                query
+            );
+            self.search_results = Some(search_stickers(&self.all_stickers, &query));
+            self.selected_sticker_id = None;
+            self.grid_state.selected = 0;
+            self.rebuild_stickers();
+            self.status = self.default_status();
+            return;
+        }
+
+        info!("[search] requesting AI search for: {:?}", query);
+        let api = self.api.clone();
+        let tx = self.search_result_tx.clone();
+        self.status = format!("AI searching for {:?}", query);
+        self.rt.spawn(async move {
+            let result = match api.search_stickers(&query).await {
+                Ok(stickers) => SearchResult::Success { query, stickers },
+                Err(error) => SearchResult::Error {
+                    query,
+                    error: error.to_string(),
+                },
+            };
+            if tx.send(result).is_err() {
+                warn!("[search] result channel closed");
+            }
+        });
     }
 
     fn default_status(&self) -> String {
@@ -635,7 +672,8 @@ impl StickerApp {
     fn apply_updated_sticker(&mut self, updated: Sticker) -> Result<bool, String> {
         let search_query = self.search_query.trim();
         let has_search_query = !search_query.is_empty();
-        let matches_search = !has_search_query || sticker_matches_query(&updated, search_query);
+        let matches_search =
+            !has_search_query || !self.is_offline || sticker_matches_query(&updated, search_query);
 
         if let Some(sticker) = self
             .all_stickers
@@ -1064,11 +1102,7 @@ impl StickerApp {
                         self.search_results = None;
                         self.rebuild_stickers();
                     } else {
-                        self.search_results = Some(search_stickers(
-                            &self.all_stickers,
-                            self.search_query.trim(),
-                        ));
-                        self.rebuild_stickers();
+                        self.trigger_search();
                     }
                     self.status = self.default_status();
                 }
@@ -1208,6 +1242,31 @@ impl StickerApp {
                     warn!("[clipboard] animated sticker download failed: {}", error);
                     self.status = format!("Animated sticker download failed: {}", error);
                 }
+            }
+        }
+
+        while let Ok(result) = self.search_result_rx.try_recv() {
+            match result {
+                SearchResult::Success { query, stickers } if query == self.search_query.trim() => {
+                    info!("[search] AI search found {} stickers", stickers.len());
+                    self.search_results = Some(stickers);
+                    self.selected_sticker_id = None;
+                    self.grid_state.selected = 0;
+                    self.rebuild_stickers();
+                    self.status = self.default_status();
+                }
+                SearchResult::Error { query, error } if query == self.search_query.trim() => {
+                    warn!("[search] AI search failed, using local search: {}", error);
+                    self.search_results = Some(search_stickers(&self.all_stickers, &query));
+                    self.selected_sticker_id = None;
+                    self.grid_state.selected = 0;
+                    self.rebuild_stickers();
+                    self.status = format!(
+                        "AI search unavailable • {} local results",
+                        self.stickers.len()
+                    );
+                }
+                _ => debug!("[search] ignoring stale search response"),
             }
         }
 
