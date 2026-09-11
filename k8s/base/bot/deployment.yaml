@@ -20,6 +20,8 @@ spec:
           env:
             - name: HTTPS_PROXY
               value: socks5://xray.proxy.svc.cluster.local:1080
+            - name: AI_INDEX_ENABLED
+              value: "false"
           ports:
             - containerPort: 8080
               name: metrics

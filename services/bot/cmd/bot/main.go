@@ -90,7 +90,11 @@ func main() {
 			}
 		}()
 
-		go semanticSearch.RunIndexer(ctx)
+		if os.Getenv("AI_INDEX_ENABLED") == "false" {
+			logger.Log.Info("[AI_INDEX] disabled by AI_INDEX_ENABLED=false")
+		} else {
+			go semanticSearch.RunIndexer(ctx)
+		}
 		b.Start(ctx)
 	}
 }
