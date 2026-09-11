@@ -20,8 +20,8 @@ func New(cfg config.DatabaseConfig) (*repository.BaseRepository, error) {
 	// Configure connection pool to prevent "too many clients" errors
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(0)  // Connections live forever (0 = unlimited)
-	db.SetConnMaxIdleTime(0)  // Idle connections never expire (0 = unlimited)
+	db.SetConnMaxLifetime(0) // Connections live forever (0 = unlimited)
+	db.SetConnMaxIdleTime(0) // Idle connections never expire (0 = unlimited)
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
