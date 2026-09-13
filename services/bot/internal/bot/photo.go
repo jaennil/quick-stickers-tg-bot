@@ -169,7 +169,7 @@ func (b *Bot) finishPhotoJob(ctx context.Context, job *repository.MediaJob, text
 	params := &bot.EditMessageTextParams{
 		ChatID:    job.ChatID,
 		MessageID: job.ProgressMessageID,
-		Text:      buildOCRResultMessage("картинку", text, nil),
+		Text:      buildOCRResultMessage("картинку", text, nil, b.search.Enabled()),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(job.StickerID)},
 		},

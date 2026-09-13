@@ -40,14 +40,27 @@ func buildDuplicateStickerMessage(existing *repository.Sticker, setName string, 
 	return text.String()
 }
 
-func buildOCRResultMessage(mediaLabel string, text string, err error) string {
+// aiFallbackNote explains that a failed OCR is no longer a dead end, but only
+// says so when the vision model is actually configured.
+func aiFallbackNote(aiEnabled bool) string {
+	if aiEnabled {
+		return "\n\nИИ опишет содержимое сам, так что искать получится и без текста. " +
+			"Задать текст вручную - кнопка ниже."
+	}
+	return "\n\nМожешь задать текст вручную кнопкой ниже."
+}
+
+func buildOCRResultMessage(mediaLabel string, text string, err error, aiEnabled bool) string {
 	switch {
 	case errors.Is(err, ocr.ErrQuotaExceeded):
-		return fmt.Sprintf("⚠️ OCR.space недоступен: квота исчерпана.\n\nСохранил %s без текста. Можешь добавить его вручную кнопкой ниже.", mediaLabel)
+		return fmt.Sprintf("⚠️ OCR.space недоступен: квота исчерпана.\n\nСохранил %s без текста.%s",
+			mediaLabel, aiFallbackNote(aiEnabled))
 	case err != nil:
-		return fmt.Sprintf("⚠️ OCR.space не смог обработать %s.\n\nОшибка: %s\n\nМожешь задать текст вручную кнопкой ниже.", mediaLabel, err)
+		return fmt.Sprintf("⚠️ OCR.space не смог обработать %s.\n\nОшибка: %s%s",
+			mediaLabel, err, aiFallbackNote(aiEnabled))
 	case text == "":
-		return fmt.Sprintf("☁️ OCR.space не нашел текст на %s.\n\nМожешь задать его вручную кнопкой ниже.", mediaLabel)
+		return fmt.Sprintf("☁️ OCR.space не нашел текст на %s.%s",
+			mediaLabel, aiFallbackNote(aiEnabled))
 	default:
 		return fmt.Sprintf("☁️ OCR.space:\n%s", text)
 	}

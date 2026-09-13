@@ -95,7 +95,7 @@ func (b *Bot) handleVideo(ctx context.Context, tgBot *bot.Bot, update *models.Up
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      buildOCRResultMessage("видео", text, ocrErr),
+		Text:      buildOCRResultMessage("видео", text, ocrErr, b.search.Enabled()),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(video.FileUniqueID)},
 		},

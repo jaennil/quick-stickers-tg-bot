@@ -31,10 +31,11 @@ func TestBuildDuplicateStickerMessage(t *testing.T) {
 
 func TestBuildOCRResultMessage(t *testing.T) {
 	tests := []struct {
-		name string
-		text string
-		err  error
-		want string
+		name      string
+		text      string
+		err       error
+		aiEnabled bool
+		want      string
 	}{
 		{
 			name: "success",
@@ -55,11 +56,34 @@ func TestBuildOCRResultMessage(t *testing.T) {
 			err:  errors.New("boom"),
 			want: "Ошибка: boom",
 		},
+		{
+			name:      "empty with ai promises automatic description",
+			aiEnabled: true,
+			want:      "ИИ опишет содержимое сам",
+		},
+		{
+			name: "empty without ai only offers manual text",
+			want: "задать текст вручную",
+		},
+		{
+			name:      "ocr error with ai still reassures",
+			err:       errors.New("boom"),
+			aiEnabled: true,
+			want:      "ИИ опишет содержимое сам",
+		},
+		{
+			name: "success never mentions ai",
+			text: "hello",
+			want: "OCR.space:\nhello",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := buildOCRResultMessage("стикер", tt.text, tt.err)
+			msg := buildOCRResultMessage("стикер", tt.text, tt.err, tt.aiEnabled)
+			if !tt.aiEnabled && strings.Contains(msg, "ИИ") {
+				t.Fatalf("must not promise AI when it is off: %q", msg)
+			}
 			if !strings.Contains(msg, tt.want) {
 				t.Fatalf("message %q does not contain %q", msg, tt.want)
 			}

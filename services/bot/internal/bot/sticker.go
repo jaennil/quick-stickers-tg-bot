@@ -257,7 +257,7 @@ func (b *Bot) handleSticker(ctx context.Context, tgBot *bot.Bot, update *models.
 	tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      buildOCRResultMessage("стикер", text, ocrErr),
+		Text:      buildOCRResultMessage("стикер", text, ocrErr, b.search.Enabled()),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: buttons,
 		},

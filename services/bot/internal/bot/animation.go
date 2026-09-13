@@ -91,7 +91,7 @@ func (b *Bot) handleAnimation(ctx context.Context, tgBot *bot.Bot, update *model
 	_, _ = tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: progressMsg.ID,
-		Text:      buildOCRResultMessage("GIF", text, ocrErr),
+		Text:      buildOCRResultMessage("GIF", text, ocrErr, b.search.Enabled()),
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{ui.EditStickerButton(animation.FileUniqueID)},
 		},
