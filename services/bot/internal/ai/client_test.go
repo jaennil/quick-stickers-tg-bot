@@ -34,33 +34,3 @@ func TestEmbedText(t *testing.T) {
 		t.Fatalf("vector was not normalized: %#v", vector)
 	}
 }
-
-func TestEmbedVideoUsesDataURL(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload struct {
-			Input []struct {
-				Content []struct {
-					Type       string `json:"type"`
-					InputVideo struct {
-						Data string `json:"data"`
-					} `json:"input_video"`
-				} `json:"content"`
-			} `json:"input"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		part := payload.Input[0].Content[1]
-		if part.Type != "input_video" || part.InputVideo.Data != "data:video/mp4;base64,AQID" {
-			t.Fatalf("unexpected video part: %#v", part)
-		}
-		_, _ = w.Write([]byte(`{"data":[{"embedding":[1,0]}]}`))
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL, "secret", "model", 2)
-	_, err := client.EmbedMedia(context.Background(), "text", []byte{1, 2, 3}, "video/mp4", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-}

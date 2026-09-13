@@ -3,7 +3,6 @@ package ai
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,11 +12,16 @@ import (
 	"time"
 )
 
-const maxErrorBody = 4096
+const (
+	maxErrorBody       = 4096
+	defaultBaseURL     = "https://api.aitunnel.ru/v1"
+	defaultModel       = "gemini-embedding-001"
+	defaultVisionModel = "gemini-3.1-flash-lite"
+	defaultDimensions  = 768
+)
 
 type Embedder interface {
 	EmbedText(ctx context.Context, text string) ([]float32, error)
-	EmbedMedia(ctx context.Context, text string, media []byte, mimeType string, video bool) ([]float32, error)
 	Model() string
 }
 
@@ -31,13 +35,13 @@ type Client struct {
 
 func NewClient(baseURL, token, model string, dimensions int) *Client {
 	if baseURL == "" {
-		baseURL = "https://api.aitunnel.ru/v1"
+		baseURL = defaultBaseURL
 	}
 	if model == "" {
-		model = "gemini-embedding-2"
+		model = defaultModel
 	}
 	if dimensions == 0 {
-		dimensions = 768
+		dimensions = defaultDimensions
 	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 3 * time.Minute},
@@ -57,36 +61,6 @@ func (c *Client) EmbedText(ctx context.Context, text string) ([]float32, error) 
 		"model":      c.model,
 		"dimensions": c.dimensions,
 		"input":      text,
-	})
-}
-
-func (c *Client) EmbedMedia(
-	ctx context.Context,
-	text string,
-	media []byte,
-	mimeType string,
-	video bool,
-) ([]float32, error) {
-	content := make([]map[string]any, 0, 2)
-	if strings.TrimSpace(text) != "" {
-		content = append(content, map[string]any{"type": "text", "text": text})
-	}
-	dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(media)
-	if video {
-		content = append(content, map[string]any{
-			"type":        "input_video",
-			"input_video": map[string]string{"data": dataURL},
-		})
-	} else {
-		content = append(content, map[string]any{
-			"type":      "image_url",
-			"image_url": map[string]string{"url": dataURL},
-		})
-	}
-	return c.embed(ctx, map[string]any{
-		"model":      c.model,
-		"dimensions": c.dimensions,
-		"input":      []any{map[string]any{"content": content}},
 	})
 }
 

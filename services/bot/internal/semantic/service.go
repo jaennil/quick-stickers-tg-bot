@@ -3,13 +3,8 @@ package semantic
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net"
-	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -17,30 +12,33 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/ai"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
-	"golang.org/x/net/proxy"
 )
 
 const (
-	indexBatchSize   = 10
-	maxMediaSize     = 25 << 20
-	defaultMinScore  = 0.25
-	defaultIndexWait = 2 * time.Second
+	describeBatchSize = 10
+	embedBatchSize    = 50
+	maxResults        = 50
+	defaultMinScore   = 0.60
+	defaultIndexWait  = 2 * time.Second
+	idleWait          = time.Minute
 )
 
+// Service indexes media in two independent stages. The vision stage turns an
+// image into text and is the expensive one; the embedding stage turns that text
+// into a vector and costs almost nothing. Each stage commits per item, so an
+// interrupted run never repeats a vision call it already paid for.
 type Service struct {
-	repo          repository.Repository
-	embedder      ai.Embedder
-	telegramToken string
-	mediaClient   *http.Client
-	minScore      float64
-	indexWait     time.Duration
+	repo      repository.Repository
+	embedder  ai.Embedder
+	describer ai.Describer
+	minScore  float64
+	indexWait time.Duration
 }
 
 func New(
 	repo repository.Repository,
 	embedder ai.Embedder,
-	telegramToken string,
-	proxyURL string,
+	describer ai.Describer,
 	minScore float64,
 	indexWait time.Duration,
 ) *Service {
@@ -51,12 +49,11 @@ func New(
 		indexWait = defaultIndexWait
 	}
 	return &Service{
-		repo:          repo,
-		embedder:      embedder,
-		telegramToken: telegramToken,
-		mediaClient:   mediaHTTPClient(proxyURL),
-		minScore:      minScore,
-		indexWait:     indexWait,
+		repo:      repo,
+		embedder:  embedder,
+		describer: describer,
+		minScore:  minScore,
+		indexWait: indexWait,
 	}
 }
 
@@ -108,8 +105,8 @@ func (s *Service) Search(ctx context.Context, userID int64, query string) ([]*re
 		ranked = append(ranked, item)
 	}
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
-	if len(ranked) > 50 {
-		ranked = ranked[:50]
+	if len(ranked) > maxResults {
+		ranked = ranked[:maxResults]
 	}
 	result := make([]*repository.Sticker, len(ranked))
 	for index, item := range ranked {
@@ -123,159 +120,122 @@ func (s *Service) RunIndexer(ctx context.Context) {
 		logger.Log.Info("[AI_INDEX] disabled")
 		return
 	}
-	logger.Log.Infow("[AI_INDEX] worker started", "model", s.embedder.Model())
+	logger.Log.Infow("[AI_INDEX] worker started",
+		"embed_model", s.embedder.Model(), "vision_model", s.visionModel())
 
 	for {
-		candidates, err := s.repo.GetEmbeddingCandidates(s.embedder.Model(), indexBatchSize)
-		if err != nil {
-			logger.Log.Errorw("[AI_INDEX] failed to load candidates", "error", err)
-			if !wait(ctx, time.Minute) {
-				return
-			}
-			continue
+		described := s.runDescribeBatch(ctx)
+		if ctx.Err() != nil {
+			return
 		}
-		if len(candidates) == 0 {
-			if !wait(ctx, time.Minute) {
-				return
-			}
-			continue
+		embedded := s.runEmbedBatch(ctx)
+		if ctx.Err() != nil {
+			return
 		}
-
-		for _, sticker := range candidates {
-			if err := s.repo.MarkEmbeddingAttempt(sticker.UserID, sticker.StickerID); err != nil {
-				logger.Log.Warnw("[AI_INDEX] failed to mark attempt", "media", sticker.StickerID, "error", err)
-			}
-			if err := s.indexOne(ctx, sticker); err != nil {
-				logger.Log.Warnw("[AI_INDEX] media indexing failed", "media", sticker.StickerID, "error", err)
-			} else {
-				logger.Log.Infow("[AI_INDEX] media indexed", "media", sticker.StickerID, "type", sticker.MediaType)
-			}
-			if !wait(ctx, s.indexWait) {
+		if described == 0 && embedded == 0 {
+			if !wait(ctx, idleWait) {
 				return
 			}
 		}
 	}
 }
 
-func (s *Service) indexOne(ctx context.Context, sticker *repository.Sticker) error {
-	media, mimeType, video, err := s.embeddingMedia(ctx, sticker)
-	if err != nil {
-		return err
-	}
-	vector, err := s.embedder.EmbedMedia(ctx, sticker.Text, media, mimeType, video)
-	if err != nil && video {
-		thumbnail, thumbnailErr := s.repo.GetThumbnail(sticker.FileID)
-		if thumbnailErr == nil {
-			vector, err = s.embedder.EmbedMedia(ctx, sticker.Text, thumbnail, "image/png", false)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	return s.repo.SaveEmbedding(
-		sticker.UserID,
-		sticker.StickerID,
-		s.embedder.Model(),
-		sticker.Text,
-		sticker.FileID,
-		encodeVector(vector),
-	)
-}
-
-func (s *Service) embeddingMedia(ctx context.Context, sticker *repository.Sticker) ([]byte, string, bool, error) {
-	if sticker.MediaType == repository.MediaTypeVideo || sticker.MediaType == repository.MediaTypeVideoFile ||
-		(sticker.MediaType == repository.MediaTypeGIF && sticker.IsVideo) {
-		media, mimeType, err := s.downloadTelegramMedia(ctx, sticker.FileID)
-		if err == nil && (mimeType == "video/mp4" || mimeType == "video/quicktime") {
-			return media, mimeType, true, nil
-		}
-	}
-	thumbnail, err := s.repo.GetThumbnail(sticker.FileID)
-	if err != nil {
-		return nil, "", false, fmt.Errorf("thumbnail unavailable: %w", err)
-	}
-	return thumbnail, "image/png", false, nil
-}
-
-func (s *Service) downloadTelegramMedia(ctx context.Context, fileID string) ([]byte, string, error) {
-	if s.telegramToken == "" {
-		return nil, "", fmt.Errorf("telegram token is empty")
-	}
-	lookupURL := fmt.Sprintf(
-		"https://api.telegram.org/bot%s/getFile?file_id=%s",
-		s.telegramToken,
-		url.QueryEscape(fileID),
-	)
-	response, err := s.mediaClient.Get(lookupURL)
-	if err != nil {
-		return nil, "", err
-	}
-	defer response.Body.Close()
-	var fileResponse struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			FilePath string `json:"file_path"`
-		} `json:"result"`
-	}
-	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&fileResponse) != nil || !fileResponse.OK {
-		return nil, "", fmt.Errorf("telegram getFile returned %s", response.Status)
-	}
-
-	downloadURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", s.telegramToken, fileResponse.Result.FilePath)
-	download, err := s.mediaClient.Get(downloadURL)
-	if err != nil {
-		return nil, "", err
-	}
-	defer download.Body.Close()
-	if download.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("telegram download returned %s", download.Status)
-	}
-	media, err := io.ReadAll(io.LimitReader(download.Body, maxMediaSize+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if len(media) > maxMediaSize {
-		return nil, "", fmt.Errorf("media exceeds %d bytes", maxMediaSize)
-	}
-	mimeType := strings.Split(download.Header.Get("Content-Type"), ";")[0]
-	if mimeType == "" || mimeType == "application/octet-stream" {
-		switch strings.ToLower(strings.TrimPrefix(filepathExtension(fileResponse.Result.FilePath), ".")) {
-		case "mov":
-			mimeType = "video/quicktime"
-		default:
-			mimeType = "video/mp4"
-		}
-	}
-	return media, mimeType, nil
-}
-
-func filepathExtension(path string) string {
-	index := strings.LastIndex(path, ".")
-	if index < 0 {
+func (s *Service) visionModel() string {
+	if s.describer == nil {
 		return ""
 	}
-	return path[index:]
+	return s.describer.VisionModel()
 }
 
-func mediaHTTPClient(proxyURL string) *http.Client {
-	client := &http.Client{Timeout: 3 * time.Minute}
-	parsedURL, err := url.Parse(proxyURL)
-	if proxyURL == "" || err != nil {
-		return client
+// runDescribeBatch is the paid stage. Every success is written before the next
+// item starts, so killing the process loses at most one in-flight call.
+func (s *Service) runDescribeBatch(ctx context.Context) int {
+	if s.describer == nil {
+		return 0
 	}
-	if parsedURL.Scheme == "socks5" {
-		dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, nil, proxy.Direct)
-		if err == nil {
-			client.Transport = &http.Transport{
-				DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
-					return dialer.Dial(network, address)
-				},
-			}
+	candidates, err := s.repo.GetAITextCandidates(s.describer.VisionModel(), describeBatchSize)
+	if err != nil {
+		logger.Log.Errorw("[AI_INDEX] failed to load vision candidates", "error", err)
+		wait(ctx, idleWait)
+		return 0
+	}
+
+	done := 0
+	for _, sticker := range candidates {
+		if ctx.Err() != nil {
+			return done
 		}
-	} else {
-		client.Transport = &http.Transport{Proxy: http.ProxyURL(parsedURL)}
+		// Mark first: a media that keeps failing moves to the back of the queue
+		// instead of blocking everything behind it.
+		if err := s.repo.MarkAITextAttempt(sticker.UserID, sticker.StickerID); err != nil {
+			logger.Log.Warnw("[AI_INDEX] failed to mark vision attempt", "media", sticker.StickerID, "error", err)
+		}
+		if err := s.describeOne(ctx, sticker); err != nil {
+			logger.Log.Warnw("[AI_INDEX] vision failed", "media", sticker.StickerID, "error", err)
+		} else {
+			done++
+			logger.Log.Infow("[AI_INDEX] media described", "media", sticker.StickerID, "type", sticker.MediaType)
+		}
+		if !wait(ctx, s.indexWait) {
+			return done
+		}
 	}
-	return client
+	return done
+}
+
+func (s *Service) describeOne(ctx context.Context, sticker *repository.Sticker) error {
+	thumbnail, err := s.repo.GetThumbnail(sticker.FileID)
+	if err != nil {
+		return fmt.Errorf("thumbnail unavailable: %w", err)
+	}
+	description, err := s.describer.Describe(ctx, thumbnail, "image/png")
+	if err != nil {
+		return err
+	}
+	// Keep the OCR text alongside: it is independent evidence and costs nothing.
+	combined := strings.TrimSpace(strings.TrimSpace(sticker.Text) + "\n" + description)
+	return s.repo.SaveAIText(
+		sticker.UserID, sticker.StickerID,
+		s.describer.VisionModel(), combined, sticker.FileID,
+	)
+}
+
+// runEmbedBatch is the cheap stage and reads only what the vision stage already
+// committed, so it can be re-run at any time without extra cost.
+func (s *Service) runEmbedBatch(ctx context.Context) int {
+	candidates, err := s.repo.GetEmbeddingCandidates(s.embedder.Model(), embedBatchSize)
+	if err != nil {
+		logger.Log.Errorw("[AI_INDEX] failed to load embedding candidates", "error", err)
+		wait(ctx, idleWait)
+		return 0
+	}
+
+	done := 0
+	for _, sticker := range candidates {
+		if ctx.Err() != nil {
+			return done
+		}
+		if err := s.repo.MarkEmbeddingAttempt(sticker.UserID, sticker.StickerID); err != nil {
+			logger.Log.Warnw("[AI_INDEX] failed to mark embedding attempt", "media", sticker.StickerID, "error", err)
+		}
+		vector, err := s.embedder.EmbedText(ctx, sticker.AIText)
+		if err != nil {
+			logger.Log.Warnw("[AI_INDEX] embedding failed", "media", sticker.StickerID, "error", err)
+			continue
+		}
+		if err := s.repo.SaveEmbedding(
+			sticker.UserID, sticker.StickerID, s.embedder.Model(),
+			sticker.AIText, sticker.FileID, encodeVector(vector),
+		); err != nil {
+			logger.Log.Warnw("[AI_INDEX] failed to save embedding", "media", sticker.StickerID, "error", err)
+			continue
+		}
+		done++
+	}
+	if done > 0 {
+		logger.Log.Infow("[AI_INDEX] embedded batch", "count", done)
+	}
+	return done
 }
 
 func encodeVector(vector []float32) []byte {

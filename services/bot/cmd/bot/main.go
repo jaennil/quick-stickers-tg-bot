@@ -50,14 +50,15 @@ func main() {
 	}()
 
 	var embedder ai.Embedder
+	var describer ai.Describer
 	if cfg.AI.Token != "" {
 		embedder = ai.NewClient(cfg.AI.BaseURL, cfg.AI.Token, cfg.AI.Model, cfg.AI.Dimensions)
+		describer = ai.NewVisionClient(cfg.AI.BaseURL, cfg.AI.Token, cfg.AI.VisionModel)
 	}
 	semanticSearch := semantic.New(
 		repo,
 		embedder,
-		cfg.Telegram.Token,
-		cfg.OCR.ProxyURL,
+		describer,
 		cfg.AI.MinScore,
 		time.Duration(cfg.AI.IndexIntervalSeconds)*time.Second,
 	)
