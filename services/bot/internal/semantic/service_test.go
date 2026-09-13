@@ -118,7 +118,7 @@ func TestVisionWorkSurvivesInterruptedIndexing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pendingAll, err := repo.GetAITextCandidates("test-vision", 100)
+	pendingAll, err := repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
 	pending := onlyUser(pendingAll, uid)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("expected one vision candidate: %d, %v", len(pending), err)
@@ -136,7 +136,7 @@ func TestVisionWorkSurvivesInterruptedIndexing(t *testing.T) {
 	}
 
 	// After restart the vision stage must consider it done...
-	pendingAll, err = repo.GetAITextCandidates("test-vision", 100)
+	pendingAll, err = repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
 	pending = onlyUser(pendingAll, uid)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("vision work was lost, would be paid for twice: %d, %v", len(pending), err)
@@ -187,7 +187,7 @@ func TestChangedTextReembedsWithoutNewVisionCall(t *testing.T) {
 	if err != nil || len(toEmbed) != 1 {
 		t.Fatalf("expected re-embedding after text change: %d, %v", len(toEmbed), err)
 	}
-	pendingAll, err := repo.GetAITextCandidates("test-vision", 100)
+	pendingAll, err := repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
 	pending := onlyUser(pendingAll, uid)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("must not pay for vision again: %d, %v", len(pending), err)
@@ -207,7 +207,7 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 	if err := repo.MarkAITextAttempt(uid, "s1"); err != nil {
 		t.Fatal(err)
 	}
-	pendingAll, err := repo.GetAITextCandidates("test-vision", 100)
+	pendingAll, err := repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
 	pending := onlyUser(pendingAll, uid)
 	if err != nil {
 		t.Fatal(err)
@@ -215,4 +215,52 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 	if len(pending) != 2 || pending[0].StickerID != "s2" {
 		t.Fatalf("attempted media must move to the back of the queue, got %v", pending)
 	}
+}
+
+// A media the provider keeps refusing must drop out of the queue instead of
+// being retried - and paid for - forever.
+func TestPermanentlyFailingMediaIsGivenUpOn(t *testing.T) {
+	repo, uid := newTestRepo(t)
+	if err := repo.SaveSticker(&repository.Sticker{
+		UserID: uid, StickerID: "bad", FileID: "file-bad", Text: "ocr",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt <= maxVisionAttempts; attempt++ {
+		pending := onlyUser(mustCandidates(t, repo), uid)
+		if len(pending) != 1 {
+			t.Fatalf("attempt %d: expected media to still be queued, got %d", attempt, len(pending))
+		}
+		if pending[0].AITextAttempts != attempt-1 {
+			t.Fatalf("attempt %d: counter is %d", attempt, pending[0].AITextAttempts)
+		}
+		if err := repo.MarkAITextAttempt(uid, "bad"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if pending := onlyUser(mustCandidates(t, repo), uid); len(pending) != 0 {
+		t.Fatalf("expected media to be dropped after %d attempts, still queued", maxVisionAttempts)
+	}
+
+	// A success later (for example after the picture changes) clears the count.
+	if err := repo.SaveAIText(uid, "bad", "test-vision", "распознано", "file-bad"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveAIText(uid, "bad", "other-vision", "распознано", "file-bad"); err != nil {
+		t.Fatal(err)
+	}
+	if pending := onlyUser(mustCandidates(t, repo), uid); len(pending) != 1 {
+		t.Fatal("a successful description must reset the attempt counter")
+	}
+}
+
+func mustCandidates(t *testing.T, repo *repository.BaseRepository) []*repository.Sticker {
+	t.Helper()
+	list, err := repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
 }

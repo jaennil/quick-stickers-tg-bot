@@ -119,27 +119,43 @@ func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, e
 
 // GetAITextCandidates returns media whose vision-model text is missing or stale.
 // This is the expensive stage, so it is tracked independently of the embedding.
-func (r *BaseRepository) GetAITextCandidates(model string, limit int) ([]*Sticker, error) {
+func (r *BaseRepository) GetAITextCandidates(model string, maxAttempts, limit int) ([]*Sticker, error) {
 	query := r.db.Rebind(`
-		SELECT ` + stickerSelectFields + `
+		SELECT ` + stickerSelectFields + `, ai_text_attempts
 		FROM stickers
-		WHERE ai_text IS NULL
+		WHERE (ai_text IS NULL
 		   OR COALESCE(ai_text_model, '') != ?
-		   OR COALESCE(ai_text_file_id, '') != file_id
+		   OR COALESCE(ai_text_file_id, '') != file_id)
+		  AND ai_text_attempts < ?
 		ORDER BY ai_text_attempted_at IS NOT NULL, ai_text_attempted_at, id DESC
 		LIMIT ?
 	`)
-	rows, err := r.db.Query(query, model, limit)
+	rows, err := r.db.Query(query, model, maxAttempts, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanStickers(rows)
+
+	var result []*Sticker
+	for rows.Next() {
+		var st Sticker
+		if err := rows.Scan(
+			&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID,
+			&st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit,
+			&st.IsAnimated, &st.IsVideo, &st.MediaType, &st.AITextAttempts,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, &st)
+	}
+	return result, rows.Err()
 }
 
 func (r *BaseRepository) MarkAITextAttempt(userID int64, stickerID string) error {
 	query := r.db.Rebind(`
-		UPDATE stickers SET ai_text_attempted_at = CURRENT_TIMESTAMP
+		UPDATE stickers SET
+			ai_text_attempted_at = CURRENT_TIMESTAMP,
+			ai_text_attempts = ai_text_attempts + 1
 		WHERE user_id = ? AND sticker_id = ?
 	`)
 	_, err := r.db.Exec(query, userID, stickerID)
@@ -154,7 +170,8 @@ func (r *BaseRepository) SaveAIText(userID int64, stickerID, model, aiText, sour
 			ai_text = ?,
 			ai_text_model = ?,
 			ai_text_file_id = ?,
-			ai_text_attempted_at = CURRENT_TIMESTAMP
+			ai_text_attempted_at = CURRENT_TIMESTAMP,
+			ai_text_attempts = 0
 		WHERE user_id = ? AND sticker_id = ?
 	`)
 	_, err := r.db.Exec(query, aiText, model, sourceFileID, userID, stickerID)

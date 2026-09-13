@@ -16,6 +16,9 @@ import (
 
 const (
 	describeBatchSize = 10
+	// A media the provider refuses is retried a few times, then left alone:
+	// without this the queue spins on it forever and keeps paying for it.
+	maxVisionAttempts = 5
 	embedBatchSize    = 50
 	maxResults        = 50
 	defaultMinScore   = 0.60
@@ -153,7 +156,7 @@ func (s *Service) runDescribeBatch(ctx context.Context) int {
 	if s.describer == nil {
 		return 0
 	}
-	candidates, err := s.repo.GetAITextCandidates(s.describer.VisionModel(), describeBatchSize)
+	candidates, err := s.repo.GetAITextCandidates(s.describer.VisionModel(), maxVisionAttempts, describeBatchSize)
 	if err != nil {
 		logger.Log.Errorw("[AI_INDEX] failed to load vision candidates", "error", err)
 		wait(ctx, idleWait)
@@ -171,7 +174,13 @@ func (s *Service) runDescribeBatch(ctx context.Context) int {
 			logger.Log.Warnw("[AI_INDEX] failed to mark vision attempt", "media", sticker.StickerID, "error", err)
 		}
 		if err := s.describeOne(ctx, sticker); err != nil {
-			logger.Log.Warnw("[AI_INDEX] vision failed", "media", sticker.StickerID, "error", err)
+			logger.Log.Warnw("[AI_INDEX] vision failed",
+				"media", sticker.StickerID, "attempt", sticker.AITextAttempts+1,
+				"of", maxVisionAttempts, "error", err)
+			if sticker.AITextAttempts+1 >= maxVisionAttempts {
+				logger.Log.Warnw("[AI_INDEX] giving up on media",
+					"media", sticker.StickerID, "attempts", maxVisionAttempts)
+			}
 		} else {
 			done++
 			logger.Log.Infow("[AI_INDEX] media described", "media", sticker.StickerID, "type", sticker.MediaType)

@@ -28,6 +28,8 @@ type Sticker struct {
 	// AIText holds the vision-model transcription plus description. It is
 	// populated only by the queries that need it.
 	AIText string
+	// AITextAttempts counts failed vision calls for this media.
+	AITextAttempts int
 }
 
 type MediaJob struct {
@@ -66,7 +68,7 @@ type Repository interface {
 	GetUserStickersByPack(userID int64, setName string, limit, offset int) ([]*Sticker, error)
 	GetUserPackStickerCount(userID int64, setName string) (int, error)
 	DeleteUserPack(userID int64, setName string) error
-	GetAITextCandidates(model string, limit int) ([]*Sticker, error)
+	GetAITextCandidates(model string, maxAttempts, limit int) ([]*Sticker, error)
 	MarkAITextAttempt(userID int64, stickerID string) error
 	SaveAIText(userID int64, stickerID, model, aiText, sourceFileID string) error
 	GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error)
