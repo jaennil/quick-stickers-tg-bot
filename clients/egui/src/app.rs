@@ -30,7 +30,7 @@ use crate::services::thumbnail_loader::ThumbnailResult;
 use crate::services::{ChatDetector, HealthChecker, StickerLoader, ThumbnailLoader};
 use crate::telegram::TelegramClient;
 use crate::ui::chat_selector::render_chat_selector;
-use crate::ui::grid::{handle_grid_navigation, render_grid, GridState};
+use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, MatchBadge};
 use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
 use crate::ui::theme::{
     apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_ERROR,
@@ -1609,7 +1609,13 @@ impl eframe::App for StickerApp {
                 .stickers
                 .iter()
                 .enumerate()
-                .map(|(i, sticker)| (i, sticker.file_id.clone()))
+                .map(|(i, sticker)| {
+                    (
+                        i,
+                        sticker.file_id.clone(),
+                        MatchBadge::from_match_type(&sticker.match_type),
+                    )
+                })
                 .collect();
 
             let grid_resp = render_grid(

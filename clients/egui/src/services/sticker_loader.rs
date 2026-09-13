@@ -156,6 +156,7 @@ mod tests {
             emoji: String::new(),
             ocr_engine: String::new(),
             manual_edit: false,
+            match_type: String::new(),
         }
     }
 

@@ -39,6 +39,8 @@ struct StickerResponse {
     ocr_engine: String,
     #[serde(default)]
     manual_edit: bool,
+    #[serde(default)]
+    match_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +67,7 @@ impl From<StickerResponse> for Sticker {
             emoji: r.emoji,
             ocr_engine: r.ocr_engine,
             manual_edit: r.manual_edit,
+            match_type: r.match_type,
         }
     }
 }

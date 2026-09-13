@@ -151,6 +151,7 @@ mod tests {
             emoji: "emoji".into(),
             ocr_engine: "ocr.space".into(),
             manual_edit: true,
+            match_type: String::new(),
         }];
 
         catalog.save(&stickers).unwrap();

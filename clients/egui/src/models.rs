@@ -15,6 +15,10 @@ pub struct Sticker {
     pub emoji: String,
     pub ocr_engine: String,
     pub manual_edit: bool,
+    /// How the server found this result: "text", "ai" or "both". Empty when
+    /// simply browsing, which is why the badge is hidden in that case.
+    #[serde(default)]
+    pub match_type: String,
 }
 
 pub fn search_stickers(stickers: &[Sticker], query: &str) -> Vec<Sticker> {
@@ -26,8 +30,17 @@ pub fn search_stickers(stickers: &[Sticker], query: &str) -> Vec<Sticker> {
         .iter()
         .filter(|sticker| sticker_matches_query(sticker, query))
         .cloned()
+        .map(|mut sticker| {
+            // Local search only ever matches text, so label it as such.
+            sticker.match_type = MATCH_TEXT.to_string();
+            sticker
+        })
         .collect()
 }
+
+pub const MATCH_TEXT: &str = "text";
+pub const MATCH_AI: &str = "ai";
+pub const MATCH_BOTH: &str = "both";
 
 pub fn sticker_matches_query(sticker: &Sticker, query: &str) -> bool {
     let text = normalize_search_text(&sticker.text);
@@ -106,7 +119,7 @@ impl std::fmt::Display for ChatInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{search_stickers, Sticker};
+    use super::{search_stickers, Sticker, MATCH_TEXT};
 
     fn sticker(id: &str, text: &str) -> Sticker {
         Sticker {
@@ -121,6 +134,7 @@ mod tests {
             emoji: String::new(),
             ocr_engine: String::new(),
             manual_edit: false,
+            match_type: String::new(),
         }
     }
 
@@ -167,5 +181,20 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].sticker_id, "1");
+    }
+
+    #[test]
+    fn local_search_labels_results_as_text_matches() {
+        let stickers = vec![sticker("a", "кот грустит"), sticker("b", "весёлый самолёт")];
+        let found = search_stickers(&stickers, "кот");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].match_type, MATCH_TEXT);
+    }
+
+    #[test]
+    fn browsing_leaves_results_unlabelled() {
+        let stickers = vec![sticker("a", "кот грустит")];
+        let all = search_stickers(&stickers, "   ");
+        assert!(all[0].match_type.is_empty());
     }
 }
