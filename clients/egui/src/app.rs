@@ -30,7 +30,7 @@ use crate::services::thumbnail_loader::ThumbnailResult;
 use crate::services::{ChatDetector, HealthChecker, StickerLoader, ThumbnailLoader};
 use crate::telegram::TelegramClient;
 use crate::ui::chat_selector::render_chat_selector;
-use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, MatchBadge};
+use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, MatchKind};
 use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
 use crate::ui::theme::{
     apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_ERROR,
@@ -466,6 +466,30 @@ impl StickerApp {
                 warn!("[search] result channel closed");
             }
         });
+    }
+
+    /// The outline colours mean nothing on their own, so name them once the
+    /// results are actually on screen.
+    fn render_match_legend(&self, ui: &mut egui::Ui) {
+        if self.search_results.is_none() {
+            return;
+        }
+        let present: Vec<MatchKind> = [MatchKind::Text, MatchKind::Ai, MatchKind::Both]
+            .into_iter()
+            .filter(|kind| {
+                self.stickers
+                    .iter()
+                    .any(|s| MatchKind::from_match_type(&s.match_type) == *kind)
+            })
+            .collect();
+        if present.is_empty() {
+            return;
+        }
+        ui.separator();
+        for kind in present {
+            // The word itself carries the colour; a glyph swatch risks tofu.
+            ui.colored_label(kind.color(), kind.legend());
+        }
     }
 
     fn default_status(&self) -> String {
@@ -1461,6 +1485,7 @@ impl eframe::App for StickerApp {
                         .truncate(),
                 )
                 .on_hover_text(&self.status);
+                self.render_match_legend(ui);
             });
         });
 
@@ -1613,7 +1638,7 @@ impl eframe::App for StickerApp {
                     (
                         i,
                         sticker.file_id.clone(),
-                        MatchBadge::from_match_type(&sticker.match_type),
+                        MatchKind::from_match_type(&sticker.match_type),
                     )
                 })
                 .collect();

@@ -60,16 +60,18 @@ pub struct GridResponse {
     pub visible_file_ids: Vec<String>,
 }
 
-/// Why a sticker showed up in the results, shown as a small chip on the cell.
+/// Why a sticker showed up in the results. Drawn as an outline in the cell
+/// padding rather than a chip on top, so it never covers the picture or the
+/// text baked into it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum MatchBadge {
+pub enum MatchKind {
     None,
     Text,
     Ai,
     Both,
 }
 
-impl MatchBadge {
+impl MatchKind {
     pub fn from_match_type(value: &str) -> Self {
         match value {
             crate::models::MATCH_TEXT => Self::Text,
@@ -79,47 +81,52 @@ impl MatchBadge {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub fn legend(self) -> &'static str {
         match self {
             Self::Text => "текст",
             Self::Ai => "ИИ",
-            Self::Both => "текст+ИИ",
+            Self::Both => "оба",
             Self::None => "",
         }
     }
 
-    fn color(self) -> egui::Color32 {
+    fn hover_text(self) -> &'static str {
         match self {
-            Self::Text => egui::Color32::from_rgb(56, 142, 60),
-            Self::Ai => egui::Color32::from_rgb(106, 76, 196),
-            Self::Both => egui::Color32::from_rgb(0, 121, 132),
+            Self::Text => "Найдено по точному совпадению текста",
+            Self::Ai => "Найдено ИИ - по смыслу или по картинке",
+            Self::Both => "Найдено и по тексту, и ИИ",
+            Self::None => "",
+        }
+    }
+
+    pub fn color(self) -> egui::Color32 {
+        match self {
+            Self::Text => egui::Color32::from_rgb(94, 190, 99),
+            Self::Ai => egui::Color32::from_rgb(160, 130, 220),
+            Self::Both => egui::Color32::from_rgb(52, 190, 175),
             Self::None => egui::Color32::TRANSPARENT,
         }
     }
 }
 
-/// Below this the chip would cover the picture it is meant to annotate.
-const MIN_BADGE_THUMB_SIZE: f32 = 84.0;
+/// Sits inside CELL_PADDING, so the thumbnail itself is never touched.
+const MATCH_OUTLINE_WIDTH: f32 = 2.0;
 
-fn render_badge(ui: &egui::Ui, rect: egui::Rect, badge: MatchBadge, thumb_size: f32) {
-    if badge == MatchBadge::None || thumb_size < MIN_BADGE_THUMB_SIZE {
+fn render_match_outline(ui: &egui::Ui, rect: egui::Rect, kind: MatchKind) {
+    if kind == MatchKind::None {
         return;
     }
-    let font = egui::FontId::proportional(9.0);
-    let painter = ui.painter();
-    let galley =
-        painter.layout_no_wrap(badge.label().to_owned(), font.clone(), egui::Color32::WHITE);
-    let pad = egui::vec2(4.0, 2.0);
-    let size = galley.size() + pad * 2.0;
-    let min = rect.min + egui::vec2(CELL_PADDING, CELL_PADDING);
-    let chip = egui::Rect::from_min_size(min, size);
-    painter.rect_filled(chip, 3.0, badge.color().gamma_multiply(0.92));
-    painter.galley(chip.min + pad, galley, egui::Color32::WHITE);
+    ui.painter().rect_stroke(
+        rect.shrink(MATCH_OUTLINE_WIDTH / 2.0),
+        CELL_ROUNDING,
+        egui::Stroke::new(MATCH_OUTLINE_WIDTH, kind.color()),
+        egui::StrokeKind::Inside,
+    );
 }
 
 pub fn render_grid(
     ui: &mut egui::Ui,
-    file_ids: &[(usize, String, MatchBadge)],
+    file_ids: &[(usize, String, MatchKind)],
     textures: &HashMap<String, TextureHandle>,
     selected: usize,
     thumb_size: f32,
@@ -152,7 +159,7 @@ pub fn render_grid(
                             break;
                         }
 
-                        let (idx, file_id, badge) = &file_ids[item_index];
+                        let (idx, file_id, kind) = &file_ids[item_index];
                         let is_selected = *idx == selected;
                         let (rect, resp) = ui.allocate_exact_size(
                             egui::vec2(thumb_size, thumb_size),
@@ -181,7 +188,12 @@ pub fn render_grid(
                             needs_thumbnail.push(file_id.clone());
                         }
 
-                        render_badge(ui, rect, *badge, thumb_size);
+                        render_match_outline(ui, rect, *kind);
+                        let resp = if *kind == MatchKind::None {
+                            resp
+                        } else {
+                            resp.on_hover_text(kind.hover_text())
+                        };
 
                         if resp.clicked() {
                             if ui.input(|i| i.modifiers.ctrl) {
@@ -289,15 +301,25 @@ pub fn handle_grid_navigation(
 
 #[cfg(test)]
 mod tests {
-    use super::MatchBadge;
+    use super::MatchKind;
     use crate::models::{MATCH_AI, MATCH_BOTH, MATCH_TEXT};
 
     #[test]
-    fn badge_maps_every_server_match_type() {
-        assert!(MatchBadge::from_match_type(MATCH_TEXT) == MatchBadge::Text);
-        assert!(MatchBadge::from_match_type(MATCH_AI) == MatchBadge::Ai);
-        assert!(MatchBadge::from_match_type(MATCH_BOTH) == MatchBadge::Both);
-        assert!(MatchBadge::from_match_type("") == MatchBadge::None);
-        assert!(MatchBadge::from_match_type("whatever") == MatchBadge::None);
+    fn match_kind_maps_every_server_match_type() {
+        assert!(MatchKind::from_match_type(MATCH_TEXT) == MatchKind::Text);
+        assert!(MatchKind::from_match_type(MATCH_AI) == MatchKind::Ai);
+        assert!(MatchKind::from_match_type(MATCH_BOTH) == MatchKind::Both);
+        assert!(MatchKind::from_match_type("") == MatchKind::None);
+        assert!(MatchKind::from_match_type("whatever") == MatchKind::None);
+    }
+
+    #[test]
+    fn only_the_none_kind_is_invisible() {
+        for kind in [MatchKind::Text, MatchKind::Ai, MatchKind::Both] {
+            assert!(!kind.legend().is_empty());
+            assert!(kind.color().a() > 0, "outline must be visible");
+        }
+        assert!(MatchKind::None.legend().is_empty());
+        assert_eq!(MatchKind::None.color().a(), 0);
     }
 }
