@@ -90,15 +90,6 @@ impl MatchKind {
         }
     }
 
-    fn hover_text(self) -> &'static str {
-        match self {
-            Self::Text => "Найдено по точному совпадению текста",
-            Self::Ai => "Найдено ИИ - по смыслу или по картинке",
-            Self::Both => "Найдено и по тексту, и ИИ",
-            Self::None => "",
-        }
-    }
-
     pub fn color(self) -> egui::Color32 {
         match self {
             Self::Text => egui::Color32::from_rgb(94, 190, 99),
@@ -189,11 +180,6 @@ pub fn render_grid(
                         }
 
                         render_match_outline(ui, rect, *kind);
-                        let resp = if *kind == MatchKind::None {
-                            resp
-                        } else {
-                            resp.on_hover_text(kind.hover_text())
-                        };
 
                         if resp.clicked() {
                             if ui.input(|i| i.modifiers.ctrl) {
