@@ -13,7 +13,12 @@ ocr:
 ai:
   token: "YOUR_AITUNNEL_TOKEN"
   base_url: "https://api.aitunnel.ru/v1"
-  model: "gemini-embedding-2"
+  # gemini-embedding-001 beat gemini-embedding-2 on this library: MRR 0.88 vs 0.83
+  model: "gemini-embedding-001"
+  # Reads the text off each image and describes it, so media is findable both by
+  # what it says and by what it shows. Costs ~0.066 RUB per item, once.
+  vision_model: "gemini-3.1-flash-lite"
   dimensions: 768
-  min_score: 0.25
+  # 0.60 keeps every correct answer while dropping ~90% of the library
+  min_score: 0.60
   index_interval_seconds: 2
