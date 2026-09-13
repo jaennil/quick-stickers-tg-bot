@@ -226,6 +226,45 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 	}
 }
 
+// The UI shows why a sticker turned up, so every result must be labelled.
+func TestSearchLabelsHowEachResultWasFound(t *testing.T) {
+	repo, uid := newTestRepo(t)
+	items := []*repository.Sticker{
+		{UserID: uid, StickerID: "byboth", FileID: "f1", Text: "кот грустит"},
+		{UserID: uid, StickerID: "byai", FileID: "f2", Text: "печальный зверь"},
+	}
+	for _, item := range items {
+		if err := repo.SaveSticker(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Both sit close to the query vector, but only one matches the text.
+	if err := repo.SaveEmbedding(uid, "byboth", "test-model", items[0].Text, "f1",
+		encodeVector([]float32{1, 0})); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveEmbedding(uid, "byai", "test-model", items[1].Text, "f2",
+		encodeVector([]float32{1, 0})); err != nil {
+		t.Fatal(err)
+	}
+
+	service := New(repo, &fakeEmbedder{query: []float32{1, 0}}, nil, 0.25, 0)
+	result, err := service.Search(context.Background(), uid, "кот грустит")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, sticker := range result {
+		got[sticker.StickerID] = sticker.MatchType
+	}
+	if got["byboth"] != MatchBoth {
+		t.Fatalf("text+vector hit should be %q, got %q", MatchBoth, got["byboth"])
+	}
+	if got["byai"] != MatchAI {
+		t.Fatalf("vector-only hit should be %q, got %q", MatchAI, got["byai"])
+	}
+}
+
 // Media is saved before its thumbnail is downloaded. Until the thumbnail
 // exists there is nothing to show the vision model, and picking the media up
 // early would burn its retry budget on a race it cannot win.

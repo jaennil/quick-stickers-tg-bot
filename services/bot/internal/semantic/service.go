@@ -24,6 +24,11 @@ const (
 	defaultMinScore   = 0.60
 	defaultIndexWait  = 2 * time.Second
 	idleWait          = time.Minute
+
+	// How a result was found, surfaced to the UI.
+	MatchText = "text"
+	MatchAI   = "ai"
+	MatchBoth = "both"
 )
 
 // Service indexes media in two independent stages. The vision stage turns an
@@ -66,6 +71,7 @@ func (s *Service) Enabled() bool {
 
 func (s *Service) Search(ctx context.Context, userID int64, query string) ([]*repository.Sticker, error) {
 	exact, err := s.repo.SearchByText(userID, query)
+	markAll(exact, MatchText)
 	if err != nil || !s.Enabled() {
 		return exact, err
 	}
@@ -92,13 +98,16 @@ func (s *Service) Search(ctx context.Context, userID int64, query string) ([]*re
 		}
 		score := cosine(queryVector, vector)
 		if score >= s.minScore {
+			item.Sticker.MatchType = MatchAI
 			scores[item.Sticker.StickerID] = scoredSticker{sticker: item.Sticker, score: score}
 		}
 	}
 	for index, sticker := range exact {
 		score := 2.0 - float64(index)*0.001
+		sticker.MatchType = MatchText
 		if existing, ok := scores[sticker.StickerID]; ok {
 			score += existing.score
+			sticker.MatchType = MatchBoth
 		}
 		scores[sticker.StickerID] = scoredSticker{sticker: sticker, score: score}
 	}
@@ -116,6 +125,12 @@ func (s *Service) Search(ctx context.Context, userID int64, query string) ([]*re
 		result[index] = item.sticker
 	}
 	return result, nil
+}
+
+func markAll(stickers []*repository.Sticker, matchType string) {
+	for _, sticker := range stickers {
+		sticker.MatchType = matchType
+	}
 }
 
 func (s *Service) RunIndexer(ctx context.Context) {

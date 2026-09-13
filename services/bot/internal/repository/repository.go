@@ -30,6 +30,9 @@ type Sticker struct {
 	AIText string
 	// AITextAttempts counts failed vision calls for this media.
 	AITextAttempts int
+	// MatchType says how a search result was found: "text", "ai" or "both".
+	// It is set per query and never persisted.
+	MatchType string
 }
 
 type MediaJob struct {

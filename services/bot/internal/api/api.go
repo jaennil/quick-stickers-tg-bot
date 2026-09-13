@@ -42,6 +42,7 @@ type StickerResponse struct {
 	Emoji      string `json:"emoji"`
 	OCREngine  string `json:"ocr_engine"`
 	ManualEdit bool   `json:"manual_edit"`
+	MatchType  string `json:"match_type,omitempty"`
 }
 
 type UpdateStickerRequest struct {
@@ -346,5 +347,6 @@ func stickerResponseFromRepo(st *repository.Sticker) StickerResponse {
 		Emoji:      st.Emoji,
 		OCREngine:  st.OCREngine,
 		ManualEdit: st.ManualEdit,
+		MatchType:  st.MatchType,
 	}
 }
