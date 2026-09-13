@@ -117,6 +117,9 @@ func TestVisionWorkSurvivesInterruptedIndexing(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.SaveThumbnail("file-1", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
 
 	pendingAll, err := repo.GetAITextCandidates("test-vision", maxVisionAttempts, 100)
 	pending := onlyUser(pendingAll, uid)
@@ -171,6 +174,9 @@ func TestChangedTextReembedsWithoutNewVisionCall(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.SaveThumbnail("file-1", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.SaveAIText(uid, "s1", "test-vision", "первый вариант", "file-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +209,9 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		if err := repo.SaveThumbnail("file-"+id, []byte("png")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := repo.MarkAITextAttempt(uid, "s1"); err != nil {
 		t.Fatal(err)
@@ -217,6 +226,32 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 	}
 }
 
+// Media is saved before its thumbnail is downloaded. Until the thumbnail
+// exists there is nothing to show the vision model, and picking the media up
+// early would burn its retry budget on a race it cannot win.
+func TestMediaWithoutThumbnailIsNotQueuedYet(t *testing.T) {
+	repo, uid := newTestRepo(t)
+	if err := repo.SaveSticker(&repository.Sticker{
+		UserID: uid, StickerID: "pending", FileID: "file-pending", Text: "ocr",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if pending := onlyUser(mustCandidates(t, repo), uid); len(pending) != 0 {
+		t.Fatal("media without a thumbnail must not be queued for vision")
+	}
+
+	if err := repo.SaveThumbnail("file-pending", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	pending := onlyUser(mustCandidates(t, repo), uid)
+	if len(pending) != 1 {
+		t.Fatalf("media must be queued once its thumbnail lands, got %d", len(pending))
+	}
+	if pending[0].AITextAttempts != 0 {
+		t.Fatalf("retry budget must be untouched, got %d", pending[0].AITextAttempts)
+	}
+}
+
 // A media the provider keeps refusing must drop out of the queue instead of
 // being retried - and paid for - forever.
 func TestPermanentlyFailingMediaIsGivenUpOn(t *testing.T) {
@@ -224,6 +259,9 @@ func TestPermanentlyFailingMediaIsGivenUpOn(t *testing.T) {
 	if err := repo.SaveSticker(&repository.Sticker{
 		UserID: uid, StickerID: "bad", FileID: "file-bad", Text: "ocr",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveThumbnail("file-bad", []byte("png")); err != nil {
 		t.Fatal(err)
 	}
 

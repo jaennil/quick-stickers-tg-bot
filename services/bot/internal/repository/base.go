@@ -127,6 +127,7 @@ func (r *BaseRepository) GetAITextCandidates(model string, maxAttempts, limit in
 		   OR COALESCE(ai_text_model, '') != ?
 		   OR COALESCE(ai_text_file_id, '') != file_id)
 		  AND ai_text_attempts < ?
+		  AND EXISTS (SELECT 1 FROM sticker_thumbnails t WHERE t.file_id = stickers.file_id)
 		ORDER BY ai_text_attempted_at IS NOT NULL, ai_text_attempted_at, id DESC
 		LIMIT ?
 	`)
