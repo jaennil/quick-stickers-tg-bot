@@ -17,17 +17,14 @@ spec:
       containers:
         - name: bot
           image: bot
+          envFrom:
+            - configMapRef:
+                name: ai-config
           env:
             - name: HTTPS_PROXY
               value: socks5://xray.proxy.svc.cluster.local:1080
             - name: AI_INDEX_ENABLED
               value: "true"
-            - name: AI_EMBED_MODEL
-              value: "gemini-embedding-001"
-            - name: AI_VISION_MODEL
-              value: "gemini-3.1-flash-lite"
-            - name: AI_MIN_SCORE
-              value: "0.60"
           ports:
             - containerPort: 8080
               name: metrics

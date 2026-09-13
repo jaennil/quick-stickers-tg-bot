@@ -5,6 +5,7 @@ namespace: sticker-bot
 
 resources:
   - namespace.yaml
+  - ai-config.yaml
   - bot/deployment.yaml
   - bot/service.yaml
   - api/deployment.yaml

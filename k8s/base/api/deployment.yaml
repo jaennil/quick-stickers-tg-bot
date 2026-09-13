@@ -26,6 +26,9 @@ spec:
       containers:
         - name: api
           image: api
+          envFrom:
+            - configMapRef:
+                name: ai-config
           env:
             - name: MODE
               value: "api"
