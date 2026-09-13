@@ -7,6 +7,9 @@ database:
 
 ocr:
   proxy_url: "socks5://xray.proxy.svc.cluster.local:1080"  # in Kubernetes use shared xray service; for Docker use host.docker.internal:2080
+  # Media the OCR cannot read is still described by the vision model, so it is
+  # kept by default. Set to true to go back to dropping it.
+  skip_without_text: false
   space_api_keys:
   - "YOUR_OCR_SPACE_API_KEY"
 

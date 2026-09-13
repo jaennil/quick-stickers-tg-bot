@@ -60,12 +60,13 @@ type stickerJob struct {
 type ProgressCallback func(progress IndexProgress)
 
 type Indexer struct {
-	repo repository.Repository
-	ocr  *ocr.OCR
+	repo            repository.Repository
+	ocr             *ocr.OCR
+	skipWithoutText bool
 }
 
-func NewIndexer(repo repository.Repository, ocr *ocr.OCR) *Indexer {
-	return &Indexer{repo: repo, ocr: ocr}
+func NewIndexer(repo repository.Repository, ocr *ocr.OCR, skipWithoutText bool) *Indexer {
+	return &Indexer{repo: repo, ocr: ocr, skipWithoutText: skipWithoutText}
 }
 
 func (i *Indexer) IndexPack(
@@ -244,8 +245,9 @@ func (i *Indexer) IndexPack(
 					)
 				}
 
-				// Skip stickers without text - they won't be searchable anyway
-				if text == "" {
+				// Media without readable text is still searchable through the
+				// vision model, so it is kept unless explicitly skipped.
+				if text == "" && i.skipWithoutText {
 					logger.Log.Debugw("[INDEX] skipping sticker (no text)",
 						"worker", workerID,
 						"sticker", sticker.FileUniqueID,

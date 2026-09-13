@@ -8,3 +8,5 @@ data:
   AI_EMBED_MODEL: "gemini-embedding-001"
   AI_VISION_MODEL: "gemini-3.1-flash-lite"
   AI_MIN_SCORE: "0.60"
+  # Vision describes pictures now, so media without readable text is worth keeping.
+  OCR_SKIP_WITHOUT_TEXT: "false"

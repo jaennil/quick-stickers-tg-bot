@@ -24,11 +24,11 @@ type Bot struct {
 	search  *semantic.Service
 }
 
-func New(token string, repo repository.Repository, ocr *ocr.OCR, search *semantic.Service) (*Bot, error) {
+func New(token string, repo repository.Repository, ocr *ocr.OCR, search *semantic.Service, skipWithoutText bool) (*Bot, error) {
 	b := &Bot{
 		repo:    repo,
 		ocr:     ocr,
-		indexer: service.NewIndexer(repo, ocr),
+		indexer: service.NewIndexer(repo, ocr, skipWithoutText),
 		state:   state.NewManager(constants.StateTTL),
 		queueCh: make(chan struct{}, 1),
 		search:  search,

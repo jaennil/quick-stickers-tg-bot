@@ -78,7 +78,7 @@ func main() {
 
 		ocrService := ocr.New(cfg.OCR.SpaceAPIKeys, cfg.OCR.ProxyURL)
 
-		b, err := bot.New(cfg.Telegram.Token, repo, ocrService, semanticSearch)
+		b, err := bot.New(cfg.Telegram.Token, repo, ocrService, semanticSearch, cfg.OCR.SkipWithoutText)
 		if err != nil {
 			logger.Log.Fatalf("Failed to create bot: %v", err)
 		}

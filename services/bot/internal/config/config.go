@@ -27,8 +27,12 @@ type DatabaseConfig struct {
 }
 
 type OCRConfig struct {
-	SpaceAPIKeys []string `yaml:"space_api_keys"`
-	ProxyURL     string   `yaml:"proxy_url"`
+	// SkipWithoutText drops media the OCR could not read. It used to be the
+	// only sensible choice; now the vision model can describe such media, so
+	// keeping it is the default.
+	SkipWithoutText bool     `yaml:"skip_without_text"`
+	SpaceAPIKeys    []string `yaml:"space_api_keys"`
+	ProxyURL        string   `yaml:"proxy_url"`
 }
 
 type APIConfig struct {
@@ -80,6 +84,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("AI_VISION_MODEL"); v != "" {
 		cfg.AI.VisionModel = v
+	}
+	if v := os.Getenv("OCR_SKIP_WITHOUT_TEXT"); v != "" {
+		cfg.OCR.SkipWithoutText = v == "true" || v == "1"
 	}
 	if v := os.Getenv("AI_MIN_SCORE"); v != "" {
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
