@@ -117,15 +117,16 @@ func (r *BaseRepository) SearchByText(userID int64, query string) ([]*Sticker, e
 	return scanStickers(rows)
 }
 
-func (r *BaseRepository) GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error) {
+// GetAITextCandidates returns media whose vision-model text is missing or stale.
+// This is the expensive stage, so it is tracked independently of the embedding.
+func (r *BaseRepository) GetAITextCandidates(model string, limit int) ([]*Sticker, error) {
 	query := r.db.Rebind(`
 		SELECT ` + stickerSelectFields + `
 		FROM stickers
-		WHERE ai_embedding IS NULL
-		   OR COALESCE(ai_embedding_model, '') != ?
-		   OR COALESCE(ai_embedding_text, '') != COALESCE(text, '')
-		   OR COALESCE(ai_embedding_file_id, '') != file_id
-		ORDER BY ai_embedding_attempted_at IS NOT NULL, ai_embedding_attempted_at, id DESC
+		WHERE ai_text IS NULL
+		   OR COALESCE(ai_text_model, '') != ?
+		   OR COALESCE(ai_text_file_id, '') != file_id
+		ORDER BY ai_text_attempted_at IS NOT NULL, ai_text_attempted_at, id DESC
 		LIMIT ?
 	`)
 	rows, err := r.db.Query(query, model, limit)
@@ -134,6 +135,66 @@ func (r *BaseRepository) GetEmbeddingCandidates(model string, limit int) ([]*Sti
 	}
 	defer rows.Close()
 	return scanStickers(rows)
+}
+
+func (r *BaseRepository) MarkAITextAttempt(userID int64, stickerID string) error {
+	query := r.db.Rebind(`
+		UPDATE stickers SET ai_text_attempted_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND sticker_id = ?
+	`)
+	_, err := r.db.Exec(query, userID, stickerID)
+	return err
+}
+
+// SaveAIText commits the vision-model output on its own, so a crash before the
+// embedding stage never costs a second vision call.
+func (r *BaseRepository) SaveAIText(userID int64, stickerID, model, aiText, sourceFileID string) error {
+	query := r.db.Rebind(`
+		UPDATE stickers SET
+			ai_text = ?,
+			ai_text_model = ?,
+			ai_text_file_id = ?,
+			ai_text_attempted_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND sticker_id = ?
+	`)
+	_, err := r.db.Exec(query, aiText, model, sourceFileID, userID, stickerID)
+	return err
+}
+
+// GetEmbeddingCandidates returns media whose vector is missing or no longer
+// matches the stored ai_text. Only media that already has ai_text qualifies.
+func (r *BaseRepository) GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error) {
+	query := r.db.Rebind(`
+		SELECT ` + stickerSelectFields + `, ai_text
+		FROM stickers
+		WHERE ai_text IS NOT NULL AND ai_text != ''
+		  AND (ai_embedding IS NULL
+		   OR COALESCE(ai_embedding_model, '') != ?
+		   OR COALESCE(ai_embedding_text, '') != ai_text)
+		ORDER BY ai_embedding_attempted_at IS NOT NULL, ai_embedding_attempted_at, id DESC
+		LIMIT ?
+	`)
+	rows, err := r.db.Query(query, model, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*Sticker
+	for rows.Next() {
+		var st Sticker
+		var aiText sql.NullString
+		if err := rows.Scan(
+			&st.ID, &st.UserID, &st.StickerID, &st.SetName, &st.FileID,
+			&st.DocumentID, &st.Text, &st.Emoji, &st.OCREngine, &st.ManualEdit,
+			&st.IsAnimated, &st.IsVideo, &st.MediaType, &aiText,
+		); err != nil {
+			return nil, err
+		}
+		st.AIText = aiText.String
+		result = append(result, &st)
+	}
+	return result, rows.Err()
 }
 
 func (r *BaseRepository) MarkEmbeddingAttempt(userID int64, stickerID string) error {
