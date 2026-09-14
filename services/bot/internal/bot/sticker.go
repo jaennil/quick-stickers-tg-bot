@@ -289,11 +289,9 @@ func (b *Bot) handleAwaitingEdit(ctx context.Context, tgBot *bot.Bot, update *mo
 	newText := strings.TrimSpace(update.Message.Text)
 	logger.Log.Infow("[EDIT] awaiting", "user", userID, "text", newText)
 
-	b.state.ClearAwaitingMode(userID)
-
-	stickerID := b.state.GetLastSticker(userID)
-	if stickerID == "" {
-		logger.Log.Warnw("[EDIT] no last sticker", "user", userID)
+	stickerID, ok := b.state.TakeAwaitingEdit(userID)
+	if !ok {
+		logger.Log.Warnw("[EDIT] no pending edit target", "user", userID)
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Ошибка: стикер не найден",

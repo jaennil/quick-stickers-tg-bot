@@ -79,8 +79,7 @@ func (b *Bot) handleEditCallback(ctx context.Context, tgBot *bot.Bot, update *mo
 	chatID := update.CallbackQuery.Message.Message.Chat.ID
 	logger.Log.Infow("[CALLBACK] edit", "sticker", stickerID, "user", userID)
 
-	b.state.SetLastSticker(userID, stickerID)
-	b.state.SetAwaitingMode(userID, state.ModeEdit)
+	b.state.SetAwaitingEdit(userID, stickerID)
 
 	tgBot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,

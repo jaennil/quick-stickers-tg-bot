@@ -16,7 +16,13 @@ const (
 )
 
 type UserState struct {
-	LastStickerID  string
+	// LastStickerID is the most recently received media, overwritten by every
+	// incoming one. It backs the /edit command.
+	LastStickerID string
+	// PendingEditID is the media an edit button was pressed on. It is kept
+	// apart from LastStickerID precisely because incoming media must not
+	// redirect an edit the user already started.
+	PendingEditID  string
 	AwaitingMode   AwaitingMode
 	ActiveIndexing context.CancelFunc
 	UpdatedAt      time.Time
@@ -73,21 +79,47 @@ func (m *Manager) cleanup() {
 	m.usersMu.Unlock()
 }
 
-func (m *Manager) getOrCreateUser(userID int64) *UserState {
+// withUser mutates a user's state while holding the write lock. Returning the
+// struct to the caller instead would let the mutation happen after unlocking.
+func (m *Manager) withUser(userID int64, mutate func(*UserState)) {
 	m.usersMu.Lock()
 	defer m.usersMu.Unlock()
-	if state, ok := m.users[userID]; ok {
-		state.UpdatedAt = time.Now()
-		return state
+	state, ok := m.users[userID]
+	if !ok {
+		state = &UserState{}
+		m.users[userID] = state
 	}
-	state := &UserState{UpdatedAt: time.Now()}
-	m.users[userID] = state
-	return state
+	mutate(state)
+	state.UpdatedAt = time.Now()
 }
 
 func (m *Manager) SetLastSticker(userID int64, stickerID string) {
-	state := m.getOrCreateUser(userID)
-	state.LastStickerID = stickerID
+	m.withUser(userID, func(s *UserState) { s.LastStickerID = stickerID })
+}
+
+// SetAwaitingEdit records both that the user is typing a correction and which
+// media it is for, so the two can never drift apart.
+func (m *Manager) SetAwaitingEdit(userID int64, stickerID string) {
+	m.withUser(userID, func(s *UserState) {
+		s.PendingEditID = stickerID
+		s.AwaitingMode = ModeEdit
+	})
+}
+
+// TakeAwaitingEdit returns the media awaiting a correction and clears it in the
+// same critical section, so a reply cannot be applied twice or to the wrong one.
+func (m *Manager) TakeAwaitingEdit(userID int64) (string, bool) {
+	m.usersMu.Lock()
+	defer m.usersMu.Unlock()
+	state, ok := m.users[userID]
+	if !ok || state.AwaitingMode != ModeEdit || state.PendingEditID == "" {
+		return "", false
+	}
+	stickerID := state.PendingEditID
+	state.PendingEditID = ""
+	state.AwaitingMode = ModeNone
+	state.UpdatedAt = time.Now()
+	return stickerID, true
 }
 
 func (m *Manager) GetLastSticker(userID int64) string {
@@ -100,8 +132,7 @@ func (m *Manager) GetLastSticker(userID int64) string {
 }
 
 func (m *Manager) SetAwaitingMode(userID int64, mode AwaitingMode) {
-	state := m.getOrCreateUser(userID)
-	state.AwaitingMode = mode
+	m.withUser(userID, func(s *UserState) { s.AwaitingMode = mode })
 }
 
 func (m *Manager) GetAwaitingMode(userID int64) AwaitingMode {
@@ -118,13 +149,13 @@ func (m *Manager) ClearAwaitingMode(userID int64) {
 	defer m.usersMu.Unlock()
 	if state, ok := m.users[userID]; ok {
 		state.AwaitingMode = ModeNone
+		state.PendingEditID = ""
 		state.UpdatedAt = time.Now()
 	}
 }
 
 func (m *Manager) SetActiveIndexing(userID int64, cancel context.CancelFunc) {
-	state := m.getOrCreateUser(userID)
-	state.ActiveIndexing = cancel
+	m.withUser(userID, func(s *UserState) { s.ActiveIndexing = cancel })
 }
 
 func (m *Manager) GetActiveIndexing(userID int64) (context.CancelFunc, bool) {
