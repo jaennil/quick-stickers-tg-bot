@@ -451,6 +451,15 @@ impl StickerApp {
         }
 
         info!("[search] requesting AI search for: {:?}", query);
+        // Show what local text matching finds straight away. The server answer
+        // includes an embedding round-trip, and until it lands the grid would
+        // otherwise keep showing the entire unfiltered library - which reads as
+        // "search is broken" rather than "search is still thinking".
+        self.search_results = Some(search_stickers(&self.all_stickers, &query));
+        self.selected_sticker_id = None;
+        self.grid_state.selected = 0;
+        self.rebuild_stickers();
+
         let api = self.api.clone();
         let tx = self.search_result_tx.clone();
         self.status = format!("AI searching for {:?}", query);
