@@ -8,7 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/repository/sqlite"
 )
@@ -22,6 +24,16 @@ func (f *fakeEmbedder) EmbedText(context.Context, string) ([]float32, error) {
 }
 
 func (f *fakeEmbedder) Model() string { return "test-model" }
+
+// stallingEmbedder never answers, mimicking a blackholed network route.
+type stallingEmbedder struct{}
+
+func (stallingEmbedder) EmbedText(ctx context.Context, _ string) ([]float32, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stallingEmbedder) Model() string { return "test-model" }
 
 type fakeDescriber struct {
 	calls int
@@ -37,6 +49,12 @@ func (f *fakeDescriber) Describe(context.Context, []byte, string) (string, error
 }
 
 func (f *fakeDescriber) VisionModel() string { return "test-vision" }
+
+// Search logs a warning on the degraded path, so the logger must exist.
+func TestMain(m *testing.M) {
+	logger.Init()
+	os.Exit(m.Run())
+}
 
 // goose panics if migrations are registered twice in one process, so the whole
 // package shares a single database and each test uses its own user id.
@@ -223,6 +241,39 @@ func TestFailedVisionIsRetriedButDoesNotBlockQueue(t *testing.T) {
 	}
 	if len(pending) != 2 || pending[0].StickerID != "s2" {
 		t.Fatalf("attempted media must move to the back of the queue, got %v", pending)
+	}
+}
+
+// A stalled embedding API must not hold the search: users get text results
+// promptly instead of waiting for their own client to time out.
+func TestSearchFallsBackWhenEmbeddingStalls(t *testing.T) {
+	repo, uid := newTestRepo(t)
+	if err := repo.SaveSticker(&repository.Sticker{
+		UserID: uid, StickerID: "s1", FileID: "f1", Text: "кот грустит",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := New(repo, stallingEmbedder{}, nil, 0.25, 0)
+	// Stand in for searchEmbedTimeout so the test stays fast.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	result, err := service.Search(ctx, uid, "кот грустит")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("a stalled embedder must degrade, not fail: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("search waited %v instead of falling back promptly", elapsed)
+	}
+	if len(result) != 1 || result[0].StickerID != "s1" {
+		t.Fatalf("expected the text match to survive, got %v", result)
+	}
+	if result[0].MatchType != MatchText {
+		t.Fatalf("fallback results must be labelled %q, got %q", MatchText, result[0].MatchType)
 	}
 }
 

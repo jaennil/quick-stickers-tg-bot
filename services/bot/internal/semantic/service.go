@@ -24,6 +24,9 @@ const (
 	defaultMinScore   = 0.60
 	defaultIndexWait  = 2 * time.Second
 	idleWait          = time.Minute
+	// Search is interactive: if the embedding API stalls, falling back to text
+	// search quickly beats making the user wait for their own client to time out.
+	searchEmbedTimeout = 8 * time.Second
 
 	// How a result was found, surfaced to the UI.
 	MatchText = "text"
@@ -76,7 +79,9 @@ func (s *Service) Search(ctx context.Context, userID int64, query string) ([]*re
 		return exact, err
 	}
 
-	queryVector, err := s.embedder.EmbedText(ctx, query)
+	embedCtx, cancel := context.WithTimeout(ctx, searchEmbedTimeout)
+	defer cancel()
+	queryVector, err := s.embedder.EmbedText(embedCtx, query)
 	if err != nil {
 		logger.Log.Warnw("[AI_SEARCH] query embedding failed; using text search", "error", err)
 		return exact, nil

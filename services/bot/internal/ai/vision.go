@@ -39,7 +39,7 @@ func NewVisionClient(baseURL, token, model string) *VisionClient {
 		model = defaultVisionModel
 	}
 	return &VisionClient{
-		httpClient: &http.Client{Timeout: 3 * time.Minute},
+		httpClient: &http.Client{Timeout: 3 * time.Minute, Transport: newTransport()},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		token:      token,
 		model:      model,

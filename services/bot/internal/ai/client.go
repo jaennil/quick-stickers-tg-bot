@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -44,12 +45,34 @@ func NewClient(baseURL, token, model string, dimensions int) *Client {
 		dimensions = defaultDimensions
 	}
 	return &Client{
-		httpClient: &http.Client{Timeout: 3 * time.Minute},
+		httpClient: &http.Client{Timeout: 3 * time.Minute, Transport: newTransport()},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		token:      token,
 		model:      model,
 		dimensions: dimensions,
 	}
+}
+
+// newTransport dials IPv4 first. IPv6 egress is a blackhole in this cluster, and
+// a stalled AAAA attempt otherwise holds the request until the caller gives up -
+// which for search means the user waits 30s for text-only results. Falling back
+// to the generic network keeps this correct on IPv6-only hosts.
+func newTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{
+		Timeout:       10 * time.Second,
+		KeepAlive:     30 * time.Second,
+		FallbackDelay: 50 * time.Millisecond,
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network == "tcp" {
+			if conn, err := dialer.DialContext(ctx, "tcp4", address); err == nil {
+				return conn, nil
+			}
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	return transport
 }
 
 func (c *Client) Model() string {
