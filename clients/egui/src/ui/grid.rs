@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, TextureHandle};
 
@@ -7,6 +8,9 @@ use super::theme::{
 };
 
 const PREFETCH_ROWS: usize = 3;
+
+/// The second `g` of `gg` must follow the first within this.
+const GG_TIMEOUT: Duration = Duration::from_millis(600);
 
 pub struct GridState {
     pub selected: usize,
@@ -18,6 +22,7 @@ pub struct GridState {
     viewport_height: f32,
     /// Selection the view was last brought in line with.
     revealed: Option<usize>,
+    pending_g: Option<Instant>,
 }
 
 impl GridState {
@@ -28,6 +33,7 @@ impl GridState {
             scroll_offset: 0.0,
             viewport_height: 0.0,
             revealed: None,
+            pending_g: None,
         }
     }
 
@@ -61,9 +67,43 @@ impl GridState {
     }
 
     pub fn navigate_down(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
         if self.selected + self.cols < count {
             self.selected += self.cols;
+        } else if self.row_of(count - 1) > self.row_of(self.selected) {
+            // The last row is shorter and has nothing straight below: land on
+            // its last item, the way vim clamps the column on a short line.
+            self.selected = count - 1;
         }
+    }
+
+    /// Feeds one press of `g` (`G` with shift). `G` jumps to the last item,
+    /// two `g` in quick succession to the first.
+    pub fn press_g(&mut self, shift: bool, count: usize, now: Instant) {
+        if count == 0 {
+            self.pending_g = None;
+            return;
+        }
+        if shift {
+            self.pending_g = None;
+            self.selected = count - 1;
+            return;
+        }
+        match self.pending_g.take() {
+            Some(first) if now.duration_since(first) <= GG_TIMEOUT => self.selected = 0,
+            _ => self.pending_g = Some(now),
+        }
+    }
+
+    /// Any other key breaks a half-typed `gg`.
+    pub fn cancel_pending(&mut self) {
+        self.pending_g = None;
+    }
+
+    fn row_of(&self, index: usize) -> usize {
+        index / self.cols.max(1)
     }
 
     pub fn update_cols(&mut self, available_width: f32, thumb_size: f32) {
@@ -397,30 +437,108 @@ pub fn handle_grid_navigation(
     count: usize,
     grid_focused: bool,
 ) {
-    // A focused text field owns the keyboard. Without this, typing "j" into
-    // the caption editor moved the grid and replaced the editor's text with
-    // another sticker's, since clicking the editor leaves the grid flag set.
+    // A focused text field owns the keyboard. Without this, typing "j" or "G"
+    // into the caption editor moved the grid and replaced the editor's text
+    // with another sticker's, since clicking the editor leaves the grid flag set.
     if !grid_focused || count == 0 || ui.ctx().wants_keyboard_input() {
+        grid_state.cancel_pending();
         return;
     }
-    if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
-        grid_state.navigate_left();
-    }
-    if ui.input(|i| i.key_pressed(egui::Key::L) || i.key_pressed(egui::Key::ArrowRight)) {
-        grid_state.navigate_right(count);
-    }
-    if ui.input(|i| i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::ArrowUp)) {
-        grid_state.navigate_up();
-    }
-    if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
-        grid_state.navigate_down(count);
+    let now = Instant::now();
+    let events = ui.input(|i| i.events.clone());
+    for event in events {
+        let egui::Event::Key {
+            key,
+            pressed: true,
+            repeat,
+            modifiers,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        match key {
+            // Holding g must not turn into gg.
+            egui::Key::G if !repeat => grid_state.press_g(modifiers.shift, count, now),
+            egui::Key::G => {}
+            egui::Key::H | egui::Key::ArrowLeft => {
+                grid_state.cancel_pending();
+                grid_state.navigate_left();
+            }
+            egui::Key::L | egui::Key::ArrowRight => {
+                grid_state.cancel_pending();
+                grid_state.navigate_right(count);
+            }
+            egui::Key::K | egui::Key::ArrowUp => {
+                grid_state.cancel_pending();
+                grid_state.navigate_up();
+            }
+            egui::Key::J | egui::Key::ArrowDown => {
+                grid_state.cancel_pending();
+                grid_state.navigate_down(count);
+            }
+            _ => grid_state.cancel_pending(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{follow_scroll, offset_to_reveal, MatchKind};
+    use super::{follow_scroll, offset_to_reveal, GridState, MatchKind};
     use crate::models::{MATCH_AI, MATCH_BOTH, MATCH_TEXT};
+    use std::time::{Duration, Instant};
+
+    fn grid(cols: usize, selected: usize) -> GridState {
+        let mut state = GridState::new();
+        state.cols = cols;
+        state.selected = selected;
+        state
+    }
+
+    #[test]
+    fn down_onto_a_short_last_row_lands_on_its_last_item() {
+        // 3 columns, 7 items: the last row holds only index 6.
+        let mut state = grid(3, 4);
+        state.navigate_down(7);
+        assert_eq!(state.selected, 6, "nothing straight below index 4");
+        state.navigate_down(7);
+        assert_eq!(state.selected, 6, "already on the last row");
+        let mut state = grid(3, 1);
+        state.navigate_down(7);
+        assert_eq!(state.selected, 4, "a full row below moves straight down");
+    }
+
+    #[test]
+    fn capital_g_jumps_to_the_end_and_gg_to_the_start() {
+        let now = Instant::now();
+        let mut state = grid(4, 5);
+        state.press_g(true, 30, now);
+        assert_eq!(state.selected, 29);
+
+        state.press_g(false, 30, now);
+        assert_eq!(state.selected, 29, "a single g does nothing yet");
+        state.press_g(false, 30, now + Duration::from_millis(200));
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn gg_needs_two_presses_close_together_and_uninterrupted() {
+        let now = Instant::now();
+        let mut slow = grid(4, 9);
+        slow.press_g(false, 30, now);
+        slow.press_g(false, 30, now + Duration::from_secs(2));
+        assert_eq!(slow.selected, 9, "too far apart is not gg");
+
+        let mut broken = grid(4, 9);
+        broken.press_g(false, 30, now);
+        broken.cancel_pending();
+        broken.press_g(false, 30, now + Duration::from_millis(100));
+        assert_eq!(broken.selected, 9, "another key in between breaks gg");
+
+        let mut empty = grid(4, 0);
+        empty.press_g(true, 0, now);
+        assert_eq!(empty.selected, 0, "G on an empty list must not underflow");
+    }
 
     #[test]
     fn reveals_rows_that_are_off_screen_in_either_direction() {
