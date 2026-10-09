@@ -46,6 +46,14 @@ type MediaJob struct {
 	Attempts          int
 }
 
+// AnimationJob is one file that needs an animated preview. Several users can
+// own the same file, so jobs are per file rather than per sticker row.
+type AnimationJob struct {
+	FileID    string
+	MediaType MediaType
+	IsVideo   bool
+}
+
 type PackStats struct {
 	SetName      string
 	Total        int
@@ -74,6 +82,10 @@ type Repository interface {
 	GetAITextCandidates(model string, maxAttempts, limit int) ([]*Sticker, error)
 	MarkAITextAttempt(userID int64, stickerID string) error
 	SaveAIText(userID int64, stickerID, model, aiText, sourceFileID string) error
+	GetAnimationCandidates(maxAttempts, limit int) ([]*AnimationJob, error)
+	MarkAnimationAttempt(fileID string) error
+	SaveAnimation(fileID string, animation []byte) error
+	GetAnimation(fileID string) ([]byte, error)
 	GetEmbeddingCandidates(model string, limit int) ([]*Sticker, error)
 	MarkEmbeddingAttempt(userID int64, stickerID string) error
 	SaveEmbedding(userID int64, stickerID, model, sourceText, sourceFileID string, embedding []byte) error

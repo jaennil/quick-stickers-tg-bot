@@ -22,6 +22,7 @@ func Register(d string) {
 	goose.AddNamedMigrationContext("009_ai_embeddings.go", upAIEmbeddings, downAIEmbeddings)
 	goose.AddNamedMigrationContext("010_ai_text.go", upAIText, downAIText)
 	goose.AddNamedMigrationContext("011_ai_text_attempts.go", upAITextAttempts, downAITextAttempts)
+	goose.AddNamedMigrationContext("012_animations.go", upAnimations, downAnimations)
 }
 
 func upInit(ctx context.Context, tx *sql.Tx) error {

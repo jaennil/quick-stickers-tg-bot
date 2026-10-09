@@ -398,6 +398,71 @@ func (r *BaseRepository) SaveThumbnail(fileID string, thumbnail []byte) error {
 	return err
 }
 
+// GetAnimationCandidates returns files that move but have no preview yet.
+// Lottie (.tgs) stickers are left out: there is no renderer for them here.
+func (r *BaseRepository) GetAnimationCandidates(maxAttempts, limit int) ([]*AnimationJob, error) {
+	query := r.db.Rebind(`
+		SELECT s.file_id,
+		       MAX(COALESCE(s.media_type, 'sticker')),
+		       MAX(CASE WHEN s.is_video THEN 1 ELSE 0 END)
+		FROM stickers s
+		WHERE (s.is_video OR COALESCE(s.media_type, 'sticker') IN ('gif', 'video', 'video_file'))
+		  AND s.animation_attempts < ?
+		  AND NOT EXISTS (SELECT 1 FROM sticker_animations a WHERE a.file_id = s.file_id)
+		GROUP BY s.file_id
+		ORDER BY MAX(CASE WHEN s.animation_attempted_at IS NULL THEN 0 ELSE 1 END),
+		         MAX(s.animation_attempted_at)
+		LIMIT ?
+	`)
+	rows, err := r.db.Query(query, maxAttempts, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*AnimationJob
+	for rows.Next() {
+		var job AnimationJob
+		var mediaType string
+		var isVideo int
+		if err := rows.Scan(&job.FileID, &mediaType, &isVideo); err != nil {
+			return nil, err
+		}
+		job.MediaType = MediaType(mediaType)
+		job.IsVideo = isVideo == 1
+		jobs = append(jobs, &job)
+	}
+	return jobs, rows.Err()
+}
+
+// MarkAnimationAttempt counts an attempt on every row sharing the file, so a
+// file that keeps failing drops out for all its owners at once.
+func (r *BaseRepository) MarkAnimationAttempt(fileID string) error {
+	query := r.db.Rebind(`
+		UPDATE stickers SET
+			animation_attempts = animation_attempts + 1,
+			animation_attempted_at = CURRENT_TIMESTAMP
+		WHERE file_id = ?
+	`)
+	_, err := r.db.Exec(query, fileID)
+	return err
+}
+
+func (r *BaseRepository) SaveAnimation(fileID string, animation []byte) error {
+	query := r.db.Rebind(`
+		INSERT INTO sticker_animations (file_id, animation) VALUES (?, ?)
+		ON CONFLICT(file_id) DO UPDATE SET animation = EXCLUDED.animation
+	`)
+	_, err := r.db.Exec(query, fileID, animation)
+	return err
+}
+
+func (r *BaseRepository) GetAnimation(fileID string) ([]byte, error) {
+	var animation []byte
+	err := r.db.Get(&animation, r.db.Rebind("SELECT animation FROM sticker_animations WHERE file_id = ?"), fileID)
+	return animation, err
+}
+
 func (r *BaseRepository) GetThumbnail(fileID string) ([]byte, error) {
 	var thumbnail []byte
 	err := r.db.Get(&thumbnail, r.db.Rebind("SELECT thumbnail FROM sticker_thumbnails WHERE file_id = ?"), fileID)
