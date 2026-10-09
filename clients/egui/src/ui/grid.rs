@@ -11,6 +11,13 @@ const PREFETCH_ROWS: usize = 3;
 pub struct GridState {
     pub selected: usize,
     pub cols: usize,
+    // Scroll position and viewport height from the last frame. The grid is
+    // virtualised - only visible rows are drawn - so revealing the selection
+    // has to be computed from these, not left to the selected cell's drawing.
+    scroll_offset: f32,
+    viewport_height: f32,
+    /// Selection the view was last brought in line with.
+    revealed: Option<usize>,
 }
 
 impl GridState {
@@ -18,7 +25,21 @@ impl GridState {
         Self {
             selected: 0,
             cols: 1,
+            scroll_offset: 0.0,
+            viewport_height: 0.0,
+            revealed: None,
         }
+    }
+
+    /// Selects `index` and brings it into view on the next frame, even when
+    /// the index is unchanged but the list under it was replaced.
+    pub fn select(&mut self, index: usize) {
+        self.selected = index;
+        self.revealed = None;
+    }
+
+    pub fn select_first(&mut self) {
+        self.select(0);
     }
 
     pub fn navigate_left(&mut self) {
@@ -51,6 +72,61 @@ impl GridState {
     }
 }
 
+/// Scroll offset that brings `row` fully into view, or `None` if it already is.
+fn offset_to_reveal(
+    row: usize,
+    row_height: f32,
+    stride: f32,
+    offset: f32,
+    viewport: f32,
+) -> Option<f32> {
+    let top = row as f32 * stride;
+    let bottom = top + row_height;
+    if top < offset - 0.5 || viewport < row_height {
+        return Some(top);
+    }
+    if bottom > offset + viewport + 0.5 {
+        return Some(bottom - viewport);
+    }
+    None
+}
+
+/// After a manual scroll: the selection moved onto the nearest fully visible
+/// row, keeping its column, or `None` when it is still on screen.
+fn follow_scroll(
+    selected: usize,
+    cols: usize,
+    count: usize,
+    row_height: f32,
+    stride: f32,
+    offset: f32,
+    viewport: f32,
+) -> Option<usize> {
+    if count == 0 || viewport < row_height {
+        return None;
+    }
+    let cols = cols.max(1);
+    let (row, col) = (selected / cols, selected % cols);
+    let last_row = (count - 1) / cols;
+    // The half-pixel slack keeps rows that sit exactly on an edge counted in.
+    let first = ((offset - 0.5) / stride).ceil().max(0.0) as usize;
+    let last = (((offset + viewport + 0.5 - row_height) / stride)
+        .floor()
+        .max(0.0) as usize)
+        .min(last_row);
+    if first > last {
+        return None;
+    }
+    let target = if row < first {
+        first
+    } else if row > last {
+        last
+    } else {
+        return None;
+    };
+    Some((target * cols + col).min(count - 1))
+}
+
 pub struct GridResponse {
     pub clicked: Option<usize>,
     pub double_clicked: Option<usize>,
@@ -58,6 +134,9 @@ pub struct GridResponse {
     pub needs_thumbnail: Vec<String>,
     pub prefetch_thumbnails: Vec<String>,
     pub visible_file_ids: Vec<String>,
+    /// Where the selection would move to keep up with a manual scroll. Left
+    /// to the caller, who knows whether moving it would lose unsaved edits.
+    pub follow_selection: Option<usize>,
 }
 
 /// Why a sticker showed up in the results. Drawn as an outline in the cell
@@ -135,11 +214,11 @@ pub fn render_grid(
     ui: &mut egui::Ui,
     file_ids: &[(usize, String, MatchKind)],
     textures: GridTextures<'_>,
-    selected: usize,
+    state: &mut GridState,
     thumb_size: f32,
-    cols: usize,
-    scroll_to_selected: bool,
 ) -> GridResponse {
+    let selected = state.selected;
+    let cols = state.cols;
     let mut clicked = None;
     let mut double_clicked = None;
     let mut ctrl_clicked = None;
@@ -148,70 +227,108 @@ pub fn render_grid(
     let mut visible_file_ids = Vec::new();
     let cols = cols.max(1);
     let total_rows = file_ids.len().div_ceil(cols);
-    let row_height = thumb_size + GRID_SPACING;
+    // Rows are laid out with GRID_SPACING between them, and the scroll area
+    // is told exactly that. Passing the spacing inside the row height while
+    // egui added its own on top made every modelled row taller than the real
+    // one, so the drawn block drifted against the scroll position.
+    let stride = thumb_size + GRID_SPACING;
     let mut rendered_rows = None;
 
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show_rows(ui, row_height, total_rows, |ui, row_range| {
-            rendered_rows = Some(row_range.clone());
+    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    let mut scrolled_by_us = false;
+    if state.revealed != Some(selected) && state.viewport_height > 0.0 {
+        if let Some(offset) = offset_to_reveal(
+            selected / cols.max(1),
+            thumb_size,
+            stride,
+            state.scroll_offset,
+            state.viewport_height,
+        ) {
+            area = area.vertical_scroll_offset(offset);
+            scrolled_by_us = true;
+        }
+        state.revealed = Some(selected);
+    }
 
-            for row in row_range {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = GRID_SPACING;
+    let output = ui
+        .scope(|ui| {
+            ui.spacing_mut().item_spacing.y = GRID_SPACING;
+            area.show_rows(ui, thumb_size, total_rows, |ui, row_range| {
+                rendered_rows = Some(row_range.clone());
 
-                    for col in 0..cols {
-                        let item_index = row * cols + col;
-                        if item_index >= file_ids.len() {
-                            break;
-                        }
+                for row in row_range {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = GRID_SPACING;
 
-                        let (idx, file_id, kind) = &file_ids[item_index];
-                        let is_selected = *idx == selected;
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(thumb_size, thumb_size),
-                            egui::Sense::click(),
-                        );
+                        for col in 0..cols {
+                            let item_index = row * cols + col;
+                            if item_index >= file_ids.len() {
+                                break;
+                            }
 
-                        let bg = if is_selected {
-                            CELL_SELECTED
-                        } else if resp.hovered() {
-                            CELL_HOVERED
-                        } else {
-                            CELL_DEFAULT
-                        };
+                            let (idx, file_id, kind) = &file_ids[item_index];
+                            let is_selected = *idx == selected;
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(thumb_size, thumb_size),
+                                egui::Sense::click(),
+                            );
 
-                        if is_selected && scroll_to_selected {
-                            ui.scroll_to_rect(rect.expand(GRID_SPACING), None);
-                        }
-
-                        ui.painter().rect_filled(rect, CELL_ROUNDING, bg);
-
-                        if let Some(tex) = textures.get(file_id) {
-                            render_texture(ui, tex, rect, thumb_size);
-                            visible_file_ids.push(file_id.clone());
-                        } else {
-                            render_placeholder(ui, rect);
-                            needs_thumbnail.push(file_id.clone());
-                        }
-
-                        render_match_outline(ui, rect, *kind);
-
-                        if resp.clicked() {
-                            if ui.input(|i| i.modifiers.ctrl) {
-                                ctrl_clicked = Some(*idx);
+                            let bg = if is_selected {
+                                CELL_SELECTED
+                            } else if resp.hovered() {
+                                CELL_HOVERED
                             } else {
-                                clicked = Some(*idx);
+                                CELL_DEFAULT
+                            };
+
+                            ui.painter().rect_filled(rect, CELL_ROUNDING, bg);
+
+                            if let Some(tex) = textures.get(file_id) {
+                                render_texture(ui, tex, rect, thumb_size);
+                                visible_file_ids.push(file_id.clone());
+                            } else {
+                                render_placeholder(ui, rect);
+                                needs_thumbnail.push(file_id.clone());
+                            }
+
+                            render_match_outline(ui, rect, *kind);
+
+                            if resp.clicked() {
+                                if ui.input(|i| i.modifiers.ctrl) {
+                                    ctrl_clicked = Some(*idx);
+                                } else {
+                                    clicked = Some(*idx);
+                                }
+                            }
+
+                            if resp.double_clicked() && !ui.input(|i| i.modifiers.ctrl) {
+                                double_clicked = Some(*idx);
                             }
                         }
+                    });
+                }
+            })
+        })
+        .inner;
 
-                        if resp.double_clicked() && !ui.input(|i| i.modifiers.ctrl) {
-                            double_clicked = Some(*idx);
-                        }
-                    }
-                });
-            }
-        });
+    let offset = output.state.offset.y;
+    let viewport = output.inner_rect.height();
+    let scrolled_by_user = !scrolled_by_us && (offset - state.scroll_offset).abs() > 0.5;
+    state.scroll_offset = offset;
+    state.viewport_height = viewport;
+    let follow_selection = if scrolled_by_user {
+        follow_scroll(
+            selected,
+            cols,
+            file_ids.len(),
+            thumb_size,
+            stride,
+            offset,
+            viewport,
+        )
+    } else {
+        None
+    };
 
     if let Some(row_range) = rendered_rows {
         let prefetch_start = row_range.start.saturating_sub(PREFETCH_ROWS);
@@ -245,6 +362,7 @@ pub fn render_grid(
         needs_thumbnail,
         prefetch_thumbnails,
         visible_file_ids,
+        follow_selection,
     }
 }
 
@@ -278,16 +396,13 @@ pub fn handle_grid_navigation(
     grid_state: &mut GridState,
     count: usize,
     grid_focused: bool,
-) -> bool {
+) {
     // A focused text field owns the keyboard. Without this, typing "j" into
     // the caption editor moved the grid and replaced the editor's text with
     // another sticker's, since clicking the editor leaves the grid flag set.
     if !grid_focused || count == 0 || ui.ctx().wants_keyboard_input() {
-        return false;
+        return;
     }
-
-    let previous = grid_state.selected;
-
     if ui.input(|i| i.key_pressed(egui::Key::H) || i.key_pressed(egui::Key::ArrowLeft)) {
         grid_state.navigate_left();
     }
@@ -300,14 +415,58 @@ pub fn handle_grid_navigation(
     if ui.input(|i| i.key_pressed(egui::Key::J) || i.key_pressed(egui::Key::ArrowDown)) {
         grid_state.navigate_down(count);
     }
-
-    grid_state.selected != previous
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MatchKind;
+    use super::{follow_scroll, offset_to_reveal, MatchKind};
     use crate::models::{MATCH_AI, MATCH_BOTH, MATCH_TEXT};
+
+    #[test]
+    fn reveals_rows_that_are_off_screen_in_either_direction() {
+        // 100px rows, 108px stride, 500px viewport scrolled to 1000px.
+        let (h, stride, viewport) = (100.0, 108.0, 500.0);
+        assert_eq!(offset_to_reveal(12, h, stride, 1000.0, viewport), None);
+        assert_eq!(
+            offset_to_reveal(5, h, stride, 1000.0, viewport),
+            Some(540.0),
+            "above: align top"
+        );
+        assert_eq!(
+            offset_to_reveal(20, h, stride, 1000.0, viewport),
+            Some(20.0 * stride + h - viewport),
+            "below: align bottom"
+        );
+        assert_eq!(offset_to_reveal(0, h, stride, 0.0, viewport), None);
+    }
+
+    #[test]
+    fn the_selection_follows_a_manual_scroll_keeping_its_column() {
+        let (h, stride, viewport) = (100.0, 108.0, 500.0);
+        // 5 columns, 100 items, selection in row 1 column 3, scrolled to row 10.
+        let to = follow_scroll(8, 5, 100, h, stride, 10.0 * stride, viewport);
+        assert_eq!(to, Some(10 * 5 + 3), "first fully visible row, same column");
+
+        // Scrolled back up past a selection far below.
+        let to = follow_scroll(90, 5, 100, h, stride, 0.0, viewport);
+        let last_visible = ((viewport - h) / stride).floor() as usize;
+        assert_eq!(to, Some(last_visible * 5));
+
+        assert_eq!(
+            follow_scroll(52, 5, 100, h, stride, 10.0 * stride, viewport),
+            None,
+            "still on screen"
+        );
+    }
+
+    #[test]
+    fn following_a_scroll_never_points_past_the_last_item() {
+        let (h, stride) = (100.0, 108.0);
+        // 3 columns, 7 items; selection in column 2 of row 0, scrolled so only
+        // the short last row is visible: column 2 does not exist there.
+        let to = follow_scroll(2, 3, 7, h, stride, 2.0 * stride, 120.0);
+        assert_eq!(to, Some(6));
+    }
 
     #[test]
     fn match_kind_maps_every_server_match_type() {

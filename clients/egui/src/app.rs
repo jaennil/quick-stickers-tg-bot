@@ -458,7 +458,7 @@ impl StickerApp {
             );
             self.search_results = Some(search_stickers(&self.all_stickers, &query));
             self.selected_sticker_id = None;
-            self.grid_state.selected = 0;
+            self.grid_state.select_first();
             self.rebuild_stickers();
             self.status = self.default_status();
             return;
@@ -471,7 +471,7 @@ impl StickerApp {
         // "search is broken" rather than "search is still thinking".
         self.search_results = Some(search_stickers(&self.all_stickers, &query));
         self.selected_sticker_id = None;
-        self.grid_state.selected = 0;
+        self.grid_state.select_first();
         self.rebuild_stickers();
 
         let api = self.api.clone();
@@ -594,15 +594,20 @@ impl StickerApp {
         self.stickers.get(self.grid_state.selected)
     }
 
+    fn editor_is_dirty(&self) -> bool {
+        self.selected_sticker()
+            .is_some_and(|sticker| self.editor_text != sticker.text)
+    }
+
     fn select_index(&mut self, idx: usize) {
         if self.stickers.is_empty() {
-            self.grid_state.selected = 0;
+            self.grid_state.select_first();
             self.selected_sticker_id = None;
             self.editor_text.clear();
             return;
         }
 
-        self.grid_state.selected = idx.min(self.stickers.len() - 1);
+        self.grid_state.select(idx.min(self.stickers.len() - 1));
         self.sync_selection_from_grid();
     }
 
@@ -705,7 +710,7 @@ impl StickerApp {
         self.stickers = stickers;
 
         if self.stickers.is_empty() {
-            self.grid_state.selected = 0;
+            self.grid_state.select_first();
             self.selected_sticker_id = None;
             self.editor_text.clear();
             return;
@@ -1328,7 +1333,7 @@ impl StickerApp {
                     info!("[search] AI search found {} stickers", stickers.len());
                     self.search_results = Some(stickers);
                     self.selected_sticker_id = None;
-                    self.grid_state.selected = 0;
+                    self.grid_state.select_first();
                     self.rebuild_stickers();
                     self.status = self.default_status();
                 }
@@ -1336,7 +1341,7 @@ impl StickerApp {
                     warn!("[search] AI search failed, using local search: {}", error);
                     self.search_results = Some(search_stickers(&self.all_stickers, &query));
                     self.selected_sticker_id = None;
-                    self.grid_state.selected = 0;
+                    self.grid_state.select_first();
                     self.rebuild_stickers();
                     self.status = format!(
                         "AI search unavailable • {} local results",
@@ -1507,7 +1512,7 @@ impl eframe::App for StickerApp {
                             {
                                 self.motion_filter = filter;
                                 self.selected_sticker_id = None;
-                                self.grid_state.selected = 0;
+                                self.grid_state.select_first();
                                 self.rebuild_stickers();
                                 self.status = self.default_status();
                             }
@@ -1706,7 +1711,7 @@ impl eframe::App for StickerApp {
             self.grid_state
                 .update_cols(ui.available_width(), self.thumb_size);
 
-            let navigated_with_keyboard = handle_grid_navigation(
+            handle_grid_navigation(
                 ui,
                 &mut self.grid_state,
                 self.stickers.len(),
@@ -1735,11 +1740,17 @@ impl eframe::App for StickerApp {
                     thumbnails: &self.textures,
                     animated: &animated_frames,
                 },
-                self.grid_state.selected,
+                &mut self.grid_state,
                 self.thumb_size,
-                self.grid_state.cols,
-                navigated_with_keyboard,
             );
+
+            // Keep the cursor on screen while scrolling, as vim does - unless
+            // that would swap the editor's text and throw away unsaved edits.
+            if let Some(idx) = grid_resp.follow_selection {
+                if !self.editor_is_dirty() {
+                    self.select_index(idx);
+                }
+            }
 
             for file_id in grid_resp.needs_thumbnail {
                 self.request_thumbnail(&file_id);
