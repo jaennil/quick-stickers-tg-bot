@@ -115,10 +115,26 @@ fn render_match_outline(ui: &egui::Ui, rect: egui::Rect, kind: MatchKind) {
     );
 }
 
+/// Everything the grid can draw a cell with.
+pub struct GridTextures<'a> {
+    pub thumbnails: &'a HashMap<String, TextureHandle>,
+    /// Current frame of each playing animation. Preferred over the thumbnail,
+    /// which stays the fallback until the animation has loaded.
+    pub animated: &'a HashMap<String, TextureHandle>,
+}
+
+impl GridTextures<'_> {
+    fn get(&self, file_id: &str) -> Option<&TextureHandle> {
+        self.animated
+            .get(file_id)
+            .or_else(|| self.thumbnails.get(file_id))
+    }
+}
+
 pub fn render_grid(
     ui: &mut egui::Ui,
     file_ids: &[(usize, String, MatchKind)],
-    textures: &HashMap<String, TextureHandle>,
+    textures: GridTextures<'_>,
     selected: usize,
     thumb_size: f32,
     cols: usize,
@@ -212,7 +228,7 @@ pub fn render_grid(
                 }
 
                 let (_, file_id, _) = &file_ids[item_index];
-                if textures.contains_key(file_id) || queued.contains(file_id) {
+                if textures.thumbnails.contains_key(file_id) || queued.contains(file_id) {
                     continue;
                 }
 

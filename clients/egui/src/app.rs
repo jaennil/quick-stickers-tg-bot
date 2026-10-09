@@ -19,10 +19,12 @@ const TARGET_WINDOW_HEIGHT_RATIO: f32 = 0.82;
 const MAX_MONITOR_WIDTH_RATIO: f32 = 0.94;
 const MAX_MONITOR_HEIGHT_RATIO: f32 = 0.92;
 
+use crate::animation::{self, Animation, Animations, Purpose, REPAINT_INTERVAL, SELECTED_SIDE};
 use crate::api::Api;
 use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
 use crate::models::{search_stickers, sticker_matches_query, ChatInfo, Sticker};
+use crate::services::animation_loader::{AnimationLoader, AnimationResult};
 use crate::services::chat_detector::match_chat_title;
 use crate::services::health_checker::{HealthState, HealthTarget};
 use crate::services::sticker_loader::StickerLoadResult;
@@ -30,7 +32,7 @@ use crate::services::thumbnail_loader::ThumbnailResult;
 use crate::services::{ChatDetector, HealthChecker, StickerLoader, ThumbnailLoader};
 use crate::telegram::TelegramClient;
 use crate::ui::chat_selector::render_chat_selector;
-use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, MatchKind};
+use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, GridTextures, MatchKind};
 use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
 use crate::ui::theme::{
     apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_ERROR,
@@ -200,6 +202,8 @@ pub struct StickerApp {
     texture_order: VecDeque<String>, // LRU order: front = oldest, back = newest
     loading_thumbs: HashSet<String>,
     thumbnail_loader: ThumbnailLoader,
+    animation_loader: AnimationLoader,
+    animations: Animations,
 
     // Services
     sticker_loader: StickerLoader,
@@ -275,6 +279,12 @@ impl StickerApp {
         // Start services
         let thumbnail_loader =
             ThumbnailLoader::start(rt.clone(), api.clone(), thumbnail_cache.clone());
+        let animation_loader = AnimationLoader::start(
+            rt.clone(),
+            api.clone(),
+            thumbnail_cache.animation_dir(),
+            cc.egui_ctx.clone(),
+        );
         let sticker_loader = StickerLoader::start(rt.clone(), api.clone(), sticker_catalog.clone());
         let chat_detector = ChatDetector::start(chats.clone());
         let health_checker = HealthChecker::start(rt.clone(), api.clone(), telegram.clone());
@@ -303,6 +313,8 @@ impl StickerApp {
             texture_order: VecDeque::new(),
             loading_thumbs: HashSet::new(),
             thumbnail_loader,
+            animation_loader,
+            animations: Animations::default(),
             sticker_loader,
             chat_detector,
             health_checker,
@@ -1121,6 +1133,27 @@ impl StickerApp {
     }
 
     fn poll_all(&mut self, ctx: &egui::Context) {
+        // Animated previews: frames are uploaded to the GPU once, here, on the
+        // UI thread that owns the texture manager.
+        while let Some(result) = self.animation_loader.try_recv() {
+            match result {
+                AnimationResult::Loaded {
+                    file_id,
+                    purpose,
+                    frames,
+                } => {
+                    let animation = Animation::upload(ctx, &format!("anim:{file_id}"), frames);
+                    self.animations.loaded(file_id, purpose, animation);
+                }
+                AnimationResult::Missing { file_id, purpose } => {
+                    self.animations.missing(file_id, purpose);
+                }
+                AnimationResult::Still { file_id, purpose } => {
+                    self.animations.still(file_id, purpose);
+                }
+            }
+        }
+
         // Poll sticker loading results
         while let Some(result) = self.sticker_loader.try_recv() {
             match result {
@@ -1321,6 +1354,7 @@ impl eframe::App for StickerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.animations.begin_frame();
         // Poll all async results
         self.poll_all(ctx);
         self.sync_window_size(ctx);
@@ -1367,10 +1401,21 @@ impl eframe::App for StickerApp {
         }
 
         let selected_sticker = self.selected_sticker().cloned();
-        let selected_texture = selected_sticker
-            .as_ref()
-            .and_then(|sticker| self.textures.get(&sticker.file_id))
-            .cloned();
+        let selected_texture = selected_sticker.as_ref().and_then(|sticker| {
+            if sticker.is_animated_media() {
+                if self.animations.want_selected(&sticker.file_id) {
+                    self.animation_loader.request(
+                        &sticker.file_id,
+                        Purpose::Selected,
+                        SELECTED_SIDE,
+                    );
+                }
+                if let Some(frame) = self.animations.selected_frame(&sticker.file_id) {
+                    return Some(frame);
+                }
+            }
+            self.textures.get(&sticker.file_id).cloned()
+        });
         let selected_pack_count = selected_sticker
             .as_ref()
             .and_then(|sticker| self.pack_counts.get(&sticker.set_name))
@@ -1652,10 +1697,14 @@ impl eframe::App for StickerApp {
                 })
                 .collect();
 
+            let animated_frames = self.animations.grid_frames();
             let grid_resp = render_grid(
                 ui,
                 &sticker_data,
-                &self.textures,
+                GridTextures {
+                    thumbnails: &self.textures,
+                    animated: &animated_frames,
+                },
                 self.grid_state.selected,
                 self.thumb_size,
                 self.grid_state.cols,
@@ -1668,6 +1717,19 @@ impl eframe::App for StickerApp {
 
             for file_id in grid_resp.prefetch_thumbnails {
                 self.request_thumbnail(&file_id);
+            }
+
+            let visible_animated: Vec<String> = {
+                let visible: HashSet<&String> = grid_resp.visible_file_ids.iter().collect();
+                self.stickers
+                    .iter()
+                    .filter(|s| s.is_animated_media() && visible.contains(&s.file_id))
+                    .map(|s| s.file_id.clone())
+                    .collect()
+            };
+            let side = animation::grid_side(self.thumb_size, ui.ctx().pixels_per_point());
+            for file_id in self.animations.visible(&visible_animated, side) {
+                self.animation_loader.request(&file_id, Purpose::Grid, side);
             }
 
             for file_id in grid_resp.visible_file_ids {
@@ -1753,6 +1815,11 @@ impl eframe::App for StickerApp {
             self.just_sent = true;
         }
 
+        // Redundant with the steady repaint above while it exists, but keeps
+        // animations alive if that loop is ever made idle-friendly.
+        if self.animations.is_moving() {
+            ctx.request_repaint_after(REPAINT_INTERVAL);
+        }
         ctx.request_repaint_after(Duration::from_millis(FRAME_TIME_MS));
     }
 }

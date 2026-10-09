@@ -1,3 +1,4 @@
+pub mod animation_loader;
 pub mod chat_detector;
 pub mod health_checker;
 pub mod sticker_loader;

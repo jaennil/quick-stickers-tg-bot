@@ -119,6 +119,11 @@ impl ThumbnailCache {
         Ok(())
     }
 
+    /// Where animated previews are kept, next to the thumbnails.
+    pub fn animation_dir(&self) -> PathBuf {
+        self.cache_dir.join("animations")
+    }
+
     pub fn cache_path(&self, file_id: &str) -> PathBuf {
         let hash = format!("{:x}", md5::compute(file_id));
         self.cache_dir.join(format!("{}.png", hash))

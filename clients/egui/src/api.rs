@@ -277,6 +277,29 @@ impl Api {
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("get_thumbnail failed after retries")))
     }
 
+    /// Looping preview for media that moves. `None` means the server has not
+    /// rendered one (yet), not that something went wrong.
+    pub async fn get_animation(&self, file_id: &str) -> Result<Option<Vec<u8>>> {
+        let url = format!(
+            "{}/animations/{}",
+            self.base_url,
+            urlencoding::encode(file_id)
+        );
+        let response = self
+            .client
+            .get(&url)
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            anyhow::bail!("API error: {}", response.status());
+        }
+        Ok(Some(response.bytes().await?.to_vec()))
+    }
+
     pub async fn get_media(&self, sticker_id: &str) -> Result<Vec<u8>> {
         let url = format!(
             "{}/media/{}?user_id={}",

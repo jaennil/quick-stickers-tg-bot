@@ -82,6 +82,11 @@ impl Sticker {
             || (self.media_type == "sticker" && self.is_video)
     }
 
+    /// Media that moves and therefore has an animated preview to play.
+    pub fn is_animated_media(&self) -> bool {
+        self.is_video_media() || self.is_gif_media()
+    }
+
     pub fn is_gif_media(&self) -> bool {
         self.media_type == "gif"
     }
