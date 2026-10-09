@@ -38,6 +38,38 @@ pub fn search_stickers(stickers: &[Sticker], query: &str) -> Vec<Sticker> {
         .collect()
 }
 
+/// Narrows the grid to media that moves or to media that does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MotionFilter {
+    #[default]
+    All,
+    Animated,
+    Static,
+}
+
+impl MotionFilter {
+    pub const ALL: [MotionFilter; 3] = [Self::All, Self::Animated, Self::Static];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Animated => "Animated",
+            Self::Static => "Static",
+        }
+    }
+
+    pub fn matches(self, sticker: &Sticker) -> bool {
+        // Lottie stickers count as animated even though the grid shows them
+        // still: what the filter answers is what the media is, not what plays.
+        let moves = sticker.is_animated_media() || sticker.is_animated;
+        match self {
+            Self::All => true,
+            Self::Animated => moves,
+            Self::Static => !moves,
+        }
+    }
+}
+
 pub const MATCH_TEXT: &str = "text";
 pub const MATCH_AI: &str = "ai";
 pub const MATCH_BOTH: &str = "both";
@@ -124,7 +156,7 @@ impl std::fmt::Display for ChatInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{search_stickers, Sticker, MATCH_TEXT};
+    use super::{search_stickers, MotionFilter, Sticker, MATCH_TEXT};
 
     fn sticker(id: &str, text: &str) -> Sticker {
         Sticker {
@@ -160,6 +192,46 @@ mod tests {
         video.media_type = "video_file".into();
 
         assert!(video.is_video_media());
+    }
+
+    #[test]
+    fn motion_filter_splits_moving_from_still_media() {
+        let with = |media_type: &str, is_video: bool, is_animated: bool| {
+            let mut s = sticker(media_type, "text");
+            s.media_type = media_type.into();
+            s.is_video = is_video;
+            s.is_animated = is_animated;
+            s
+        };
+        let moving = [
+            with("sticker", true, false), // video sticker
+            with("sticker", false, true), // lottie
+            with("gif", true, false),
+            with("video", false, false),
+            with("video_file", false, false),
+        ];
+        let still = [with("sticker", false, false), with("photo", false, false)];
+
+        for s in &moving {
+            assert!(
+                MotionFilter::Animated.matches(s),
+                "{} should be animated",
+                s.media_type
+            );
+            assert!(!MotionFilter::Static.matches(s));
+        }
+        for s in &still {
+            assert!(
+                MotionFilter::Static.matches(s),
+                "{} should be static",
+                s.media_type
+            );
+            assert!(!MotionFilter::Animated.matches(s));
+        }
+        assert!(moving
+            .iter()
+            .chain(&still)
+            .all(|s| MotionFilter::All.matches(s)));
     }
 
     #[test]

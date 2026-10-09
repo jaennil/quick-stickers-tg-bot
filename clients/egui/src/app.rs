@@ -23,7 +23,7 @@ use crate::animation::{self, Animation, Animations, Purpose, REPAINT_INTERVAL, S
 use crate::api::Api;
 use crate::cache::{StickerCatalog, ThumbnailCache};
 use crate::hotkey::HotkeyEvent;
-use crate::models::{search_stickers, sticker_matches_query, ChatInfo, Sticker};
+use crate::models::{search_stickers, sticker_matches_query, ChatInfo, MotionFilter, Sticker};
 use crate::services::animation_loader::{AnimationLoader, AnimationResult};
 use crate::services::chat_detector::match_chat_title;
 use crate::services::health_checker::{HealthState, HealthTarget};
@@ -183,6 +183,7 @@ pub struct StickerApp {
     selected_chat: Option<ChatInfo>,
     status: String,
     pack_filter: Option<String>,
+    motion_filter: MotionFilter,
     sort_mode: SortMode,
     pack_counts: HashMap<String, usize>,
     pack_options: Vec<(String, usize)>,
@@ -298,6 +299,7 @@ impl StickerApp {
             selected_chat: None,
             status: "Loading...".into(),
             pack_filter: None,
+            motion_filter: MotionFilter::default(),
             sort_mode: SortMode::Recent,
             pack_counts: HashMap::new(),
             pack_options: Vec::new(),
@@ -531,6 +533,13 @@ impl StickerApp {
         } else {
             format!("{} stickers", self.stickers.len())
         };
+        // The counts above are already narrowed by the type filter; say so,
+        // or "223 stickers" reads like the library shrank.
+        let status = match self.motion_filter {
+            MotionFilter::All => status,
+            _ if self.is_loading_all => status,
+            filter => format!("{status} • {} only", filter.label().to_lowercase()),
+        };
 
         if self.is_offline {
             format!("Offline • {status}")
@@ -666,6 +675,8 @@ impl StickerApp {
         if let Some(pack_filter) = &self.pack_filter {
             stickers.retain(|sticker| sticker.set_name == *pack_filter);
         }
+        let motion_filter = self.motion_filter;
+        stickers.retain(|sticker| motion_filter.matches(sticker));
 
         match self.sort_mode {
             SortMode::Recent => {}
@@ -1478,6 +1489,25 @@ impl eframe::App for StickerApp {
                                 .clicked()
                             {
                                 self.sort_mode = mode;
+                                self.rebuild_stickers();
+                                self.status = self.default_status();
+                            }
+                        }
+                    });
+
+                ui.separator();
+                ui.label("Type:");
+                egui::ComboBox::from_id_salt("motion_filter")
+                    .selected_text(self.motion_filter.label())
+                    .show_ui(ui, |ui| {
+                        for filter in MotionFilter::ALL {
+                            if ui
+                                .selectable_label(self.motion_filter == filter, filter.label())
+                                .clicked()
+                            {
+                                self.motion_filter = filter;
+                                self.selected_sticker_id = None;
+                                self.grid_state.selected = 0;
                                 self.rebuild_stickers();
                                 self.status = self.default_status();
                             }
