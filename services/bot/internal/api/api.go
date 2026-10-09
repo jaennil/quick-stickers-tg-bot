@@ -1,24 +1,21 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jaennil/sticker-search-bot/internal/config"
 	"github.com/jaennil/sticker-search-bot/internal/logger"
 	"github.com/jaennil/sticker-search-bot/internal/repository"
 	"github.com/jaennil/sticker-search-bot/internal/semantic"
 	"github.com/jaennil/sticker-search-bot/internal/telegram/fileid"
+	"github.com/jaennil/sticker-search-bot/internal/telegram/files"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/net/proxy"
 )
 
 type Server struct {
@@ -57,37 +54,8 @@ func New(cfg config.APIConfig, repo repository.Repository, search *semantic.Serv
 		apiKey:        cfg.APIKey,
 		port:          cfg.Port,
 		telegramToken: telegramToken,
-		httpClient:    newHTTPClient(proxyURL),
+		httpClient:    files.NewHTTPClient(proxyURL),
 	}
-}
-
-func newHTTPClient(proxyURL string) *http.Client {
-	client := &http.Client{Timeout: 2 * time.Minute}
-	if proxyURL == "" {
-		return client
-	}
-	parsedURL, err := url.Parse(proxyURL)
-	if err != nil {
-		logger.Log.Warnw("[API] invalid media proxy URL", "error", err)
-		return client
-	}
-	if parsedURL.Scheme == "socks5" {
-		dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, nil, proxy.Direct)
-		if err != nil {
-			logger.Log.Warnw("[API] failed to create media SOCKS5 dialer", "error", err)
-			return client
-		}
-		client.Transport = &http.Transport{
-			DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
-			},
-		}
-		logger.Log.Info("[API] using SOCKS5 proxy for Telegram media")
-		return client
-	}
-	client.Transport = &http.Transport{Proxy: http.ProxyURL(parsedURL)}
-	logger.Log.Info("[API] using HTTP proxy for Telegram media")
-	return client
 }
 
 func (s *Server) Start() error {
