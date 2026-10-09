@@ -279,7 +279,10 @@ pub fn handle_grid_navigation(
     count: usize,
     grid_focused: bool,
 ) -> bool {
-    if !grid_focused || count == 0 {
+    // A focused text field owns the keyboard. Without this, typing "j" into
+    // the caption editor moved the grid and replaced the editor's text with
+    // another sticker's, since clicking the editor leaves the grid flag set.
+    if !grid_focused || count == 0 || ui.ctx().wants_keyboard_input() {
         return false;
     }
 
