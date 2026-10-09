@@ -64,6 +64,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stickers/", s.authMiddleware(s.handleStickerByID))
 	mux.HandleFunc("/api/thumbnails/", s.authMiddleware(s.handleThumbnails))
 	mux.HandleFunc("/api/media/", s.authMiddleware(s.handleMedia))
+	mux.HandleFunc("/api/animations/", s.authMiddleware(s.handleAnimations))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	addr := fmt.Sprintf(":%d", s.port)
@@ -213,6 +214,27 @@ func (s *Server) handleThumbnails(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(thumbnail)
+}
+
+// handleAnimations serves the looping preview rendered for media that moves.
+// A 404 just means none exists (yet): the client keeps the static thumbnail.
+func (s *Server) handleAnimations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fileID := strings.TrimPrefix(r.URL.Path, "/api/animations/")
+	if fileID == "" {
+		http.Error(w, "file_id is required", http.StatusBadRequest)
+		return
+	}
+	animation, err := s.repo.GetAnimation(fileID)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/webp")
+	w.Write(animation)
 }
 
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
