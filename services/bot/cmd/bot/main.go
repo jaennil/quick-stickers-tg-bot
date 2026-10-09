@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jaennil/sticker-search-bot/internal/ai"
+	"github.com/jaennil/sticker-search-bot/internal/animation"
 	"github.com/jaennil/sticker-search-bot/internal/api"
 	"github.com/jaennil/sticker-search-bot/internal/bot"
 	"github.com/jaennil/sticker-search-bot/internal/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/jaennil/sticker-search-bot/internal/repository/postgres"
 	"github.com/jaennil/sticker-search-bot/internal/repository/sqlite"
 	"github.com/jaennil/sticker-search-bot/internal/semantic"
+	"github.com/jaennil/sticker-search-bot/internal/telegram/files"
 )
 
 func main() {
@@ -91,6 +93,12 @@ func main() {
 			}
 		}()
 
+		if os.Getenv("ANIMATION_ENABLED") == "false" {
+			logger.Log.Info("[ANIMATION] disabled by ANIMATION_ENABLED=false")
+		} else {
+			telegramFiles := files.New(cfg.Telegram.Token, files.NewHTTPClient(cfg.OCR.ProxyURL))
+			go animation.New(repo, telegramFiles, animation.Render).Run(ctx)
+		}
 		if os.Getenv("AI_INDEX_ENABLED") == "false" {
 			logger.Log.Info("[AI_INDEX] disabled by AI_INDEX_ENABLED=false")
 		} else {
