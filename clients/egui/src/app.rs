@@ -33,7 +33,9 @@ use crate::services::{ChatDetector, HealthChecker, StickerLoader, ThumbnailLoade
 use crate::telegram::TelegramClient;
 use crate::ui::chat_selector::render_chat_selector;
 use crate::ui::grid::{handle_grid_navigation, render_grid, GridState, GridTextures, MatchKind};
-use crate::ui::search::{handle_focus, render_search_bar, render_size_slider};
+use crate::ui::search::{
+    handle_focus, release_focus, render_search_bar, render_size_slider, take_tab,
+};
 use crate::ui::theme::{
     apply_dark_theme, DEFAULT_THUMB_SIZE, FRAME_TIME_MS, SEARCH_DEBOUNCE_MS, STATUS_ERROR,
     STATUS_OK, STATUS_TEXT, STATUS_WARN,
@@ -1371,6 +1373,7 @@ impl eframe::App for StickerApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.animations.begin_frame();
+        let tab_pressed = take_tab(ctx);
         // Poll all async results
         self.poll_all(ctx);
         self.sync_window_size(ctx);
@@ -1475,9 +1478,8 @@ impl eframe::App for StickerApp {
                 search_has_focus = search_resp.has_focus;
 
                 handle_focus(
-                    ui,
                     ctx,
-                    search_resp.id,
+                    tab_pressed,
                     &mut self.focus_search,
                     &mut self.grid_focused,
                     !self.stickers.is_empty(),
@@ -1779,17 +1781,20 @@ impl eframe::App for StickerApp {
 
             if let Some(idx) = grid_resp.ctrl_clicked {
                 self.grid_focused = true;
+                release_focus(ui.ctx());
                 self.select_index(idx);
                 self.copy_sticker_to_clipboard();
             }
 
             if let Some(idx) = grid_resp.clicked {
                 self.grid_focused = true;
+                release_focus(ui.ctx());
                 self.select_index(idx);
             }
 
             if let Some(idx) = grid_resp.double_clicked {
                 self.grid_focused = true;
+                release_focus(ui.ctx());
                 self.select_index(idx);
                 self.send_sticker();
             }

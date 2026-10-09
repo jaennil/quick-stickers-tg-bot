@@ -314,7 +314,10 @@ pub fn render_grid(
                             let is_selected = *idx == selected;
                             let (rect, resp) = ui.allocate_exact_size(
                                 egui::vec2(thumb_size, thumb_size),
-                                egui::Sense::click(),
+                                // Clicks only: `Sense::click()` also makes the cell
+                                // focusable, and a focused cell lets egui's arrow-key
+                                // traversal carry focus off the grid to the toolbar.
+                                egui::Sense::CLICK,
                             );
 
                             let bg = if is_selected {
