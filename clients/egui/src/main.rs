@@ -1,3 +1,4 @@
+mod animation;
 mod api;
 mod app;
 mod cache;
