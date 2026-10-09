@@ -240,3 +240,29 @@ func TestRenderProducesAnimatedWebPWithAlpha(t *testing.T) {
 		t.Fatal("transparency was lost: no ALPH chunk")
 	}
 }
+
+// A "video" sticker can be a single frame lasting 1/30s. The fps filter used to
+// drop it entirely, so the encoder failed on every attempt (seen in production).
+func TestRenderSurvivesSingleFrameVideo(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	source := filepath.Join(t.TempDir(), "one-frame.webm")
+	build := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=blue:s=512x219:r=30",
+		"-frames:v", "1", "-c:v", "libvpx-vp9", source)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("cannot build a one-frame fixture here: %v %s", err, out)
+	}
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := Render(context.Background(), raw, ".webm")
+	if err != nil {
+		t.Fatalf("a single-frame clip must still render: %v", err)
+	}
+	if !bytes.HasPrefix(preview, []byte("RIFF")) {
+		t.Fatal("output is not a WebP")
+	}
+}

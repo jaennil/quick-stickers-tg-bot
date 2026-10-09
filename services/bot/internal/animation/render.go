@@ -68,8 +68,12 @@ func runFFmpeg(ctx context.Context, input, output, decoder string) error {
 		"-i", input,
 		"-t", fmt.Sprint(previewSeconds),
 		"-an",
+		// eof_action=pass keeps the last frame at end of input. Without it a
+		// clip shorter than one output frame (a single-frame "video" sticker
+		// lasting 1/30s) comes out of the fps filter empty, and the encoder
+		// then fails to assemble an animation with nothing in it.
 		"-vf", fmt.Sprintf(
-			"fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos",
+			"fps=%d:eof_action=pass,scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos",
 			previewFPS, previewSize, previewSize),
 		"-c:v", "libwebp_anim",
 		"-quality", fmt.Sprint(previewQuality),
