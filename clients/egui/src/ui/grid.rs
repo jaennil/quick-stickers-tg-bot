@@ -79,20 +79,24 @@ impl GridState {
         }
     }
 
-    /// Feeds one press of `g` (`G` with shift). `G` jumps to the last item,
-    /// two `g` in quick succession to the first.
+    /// Feeds one press of `g` (`G` with shift). Both move vertically only:
+    /// `gg` to the top row and `G` to the bottom row, keeping the column.
     pub fn press_g(&mut self, shift: bool, count: usize, now: Instant) {
         if count == 0 {
             self.pending_g = None;
             return;
         }
+        let cols = self.cols.max(1);
+        let col = self.selected % cols;
         if shift {
             self.pending_g = None;
-            self.selected = count - 1;
+            // The bottom row may be short; then stop at its last item, the
+            // way `j` does.
+            self.selected = (self.row_of(count - 1) * cols + col).min(count - 1);
             return;
         }
         match self.pending_g.take() {
-            Some(first) if now.duration_since(first) <= GG_TIMEOUT => self.selected = 0,
+            Some(first) if now.duration_since(first) <= GG_TIMEOUT => self.selected = col,
             _ => self.pending_g = Some(now),
         }
     }
@@ -509,16 +513,25 @@ mod tests {
     }
 
     #[test]
-    fn capital_g_jumps_to_the_end_and_gg_to_the_start() {
+    fn gg_and_capital_g_move_vertically_keeping_the_column() {
         let now = Instant::now();
-        let mut state = grid(4, 5);
-        state.press_g(true, 30, now);
-        assert_eq!(state.selected, 29);
-
+        // 4 columns, 30 items: rows 0..=7, the last row holds 28 and 29.
+        let mut state = grid(4, 13); // row 3, column 1
         state.press_g(false, 30, now);
-        assert_eq!(state.selected, 29, "a single g does nothing yet");
+        assert_eq!(state.selected, 13, "a single g does nothing yet");
         state.press_g(false, 30, now + Duration::from_millis(200));
-        assert_eq!(state.selected, 0);
+        assert_eq!(state.selected, 1, "gg: top row, same column");
+
+        state.press_g(true, 30, now);
+        assert_eq!(state.selected, 29, "G: bottom row, same column");
+    }
+
+    #[test]
+    fn capital_g_stops_at_the_end_of_a_short_bottom_row() {
+        // Column 2 does not exist in the last row (28, 29).
+        let mut state = grid(4, 10);
+        state.press_g(true, 30, Instant::now());
+        assert_eq!(state.selected, 29);
     }
 
     #[test]
